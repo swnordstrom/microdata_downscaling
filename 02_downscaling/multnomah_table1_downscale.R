@@ -139,7 +139,14 @@ y.5 = tab.5 %>%
     age.sex = gsub('\\s[a-z]+\\s', ',', age.sex)
   ) %>%
   ### Hispanic yes/no column
-  mutate(hsp = ifelse(grepl('hisp', var_desc), !grepl('not', universe), NA)) %>%
+  mutate(
+    hsp = case_when(
+      grepl('hisp', var_desc) & !grepl('not', universe) ~ 'hisp',
+      grepl('hisp', var_desc) &  grepl('not', universe) ~ 'nhwh',
+      .default = NA
+    )
+  ) %>%
+#       grepl('hisp', var_desc), !grepl('not', universe), NA)) %>%
   ### Race column
   # race was extracted and put into the 'universe' column
   mutate(rac = ifelse(grepl('sex', var_desc) & !grepl('hisp', var_desc), universe, NA)) %>%
@@ -257,7 +264,11 @@ x.5.all = acs.5 %>%
     age.pov = cut(AGE, breaks = c(age.p.breaks, Inf), right = FALSE),
     age.sex = cut(AGE, breaks = c(age.s.breaks, Inf), right = FALSE),
     pov     = cut(pov, breaks = c(pov.breaks, Inf), right = FALSE),
-    hsp = as.logical(HISPAN > 0)
+    hsp = case_when(
+      HISPAN > 0 ~ 'hisp',
+      RACE %in% 1 ~ 'nhwh',
+      .default = 'nhnw'
+    )
   ) %>%
   mutate(xidx = 1:nrow(.)) %>%
   select(xidx, everything())
@@ -283,8 +294,7 @@ x.5 = x.5.all %>%
     pov     = gsub('^\\[', 'pov', pov),
     age.sex = gsub('^\\[', 'age.sex', age.sex),
     across(c(age.pov, pov, age.sex), ~ gsub('\\,', '_', .x)),
-    across(c(age.pov, pov, age.sex), ~ gsub('\\)$', '', .x)),
-    hsp = paste0('hisp', hsp)
+    across(c(age.pov, pov, age.sex), ~ gsub('\\)$', '', .x))
   ) %>%
   # Add total columns and start pivoting
   # First pivot poverty's age totals
@@ -348,6 +358,7 @@ x.5 = x.5.all %>%
     names_sep = '__', values_fill = 0
   ) %>%
   filter(xidx > 0) %>%
+  select(-contains('nhnw')) %>%
   arrange(xidx)
  
 data.frame(
@@ -355,7 +366,7 @@ data.frame(
   in.y = y.5 %>% 
     distinct(is.grand.total, age.pov, pov, rac, hsp, sex, age.sex) %>%
     mutate(across(everything(), ~ ifelse(is.na(.), '', .)))
-) # %>% View()
+) # %>% select(-in.y.is.grand.total) %>% sample_n(15)
 # Looks good
 
 # Constraints each individual should be contributing to (not in order)
@@ -368,6 +379,7 @@ data.frame(
 # 7. sex-hisp
 # 8. sex-race-age
 # 9. sex-hisp-age
+# note that non-hispanic nonwhites (NHNW) don't contribute to 5, 7, 9
 
 ####### == Run PMEDM
 ####### ==
@@ -395,9 +407,8 @@ p.5 = PMEDM_solve(xx, yy, vv, dd)
 ####### ==
 ####### ==
 
-plot(data.frame(observed = y.5$E, predicted = p.5$pred * NN))
+plot(data.frame(observed = y.5$E, predicted = p.5$pred * NN)) # NICE
 abline(a = 0, b = 1)
-# hmm... some of these are off...
 
 y.fit = y.5 %>% mutate(pred = p.5$pred * NN)
 
@@ -411,56 +422,5 @@ y.fit %>%
   scale_shape_manual(values = c(1, 19)) +
   coord_fixed()
 
-# Okay - large values definitely being overestimated...
-# overestimation looks consistently much worse for non-hispanic whites
-# (unclear for hispanics but there are certainly some overestimates)
 
-y.fit %>%
-  mutate(err = pred - E) %>%
-  ggplot(aes(x = err, fill = hsp, colour = hsp, group = hsp)) +
-  geom_density(alpha = 0.25) +
-  facet_wrap(~ hsp, scales = 'free')
-# well - definitely looks like there is overestimation happening for non-hispanic whites
-# also probably for hispanics
-# less so for the other variables
-
-y.fit %>%
-  mutate(E = ifelse(!E, 0.1, E)) %>%
-  mutate(err = pred - E) %>%
-  ggplot(aes(x = E, y = err, colour = sex)) +
-  scale_x_log10() +
-  geom_point(alpha = 0.5) +
-  facet_wrap(~ hsp)
-
-# Yes. Definitely some over-estimation happening with non-white hispanics
-# Probably happening with the totals...?
-
-y.fit %>%
-  mutate(E = ifelse(!E, 0.1, E)) %>%
-  mutate(err = pred - E) %>%
-  ggplot(aes(x = E, y = err, colour = sex)) +
-  scale_x_log10() +
-  geom_point(alpha = 0.5) +
-  facet_wrap(~ rac)
-
-y.whsp = y.fit %>%
-  filter(rac %in% 'white' | !is.na(hsp)) %>%
-  mutate(spr = ifelse(is.na(hsp), rac, hsp)) %>%
-  select(-c(hsp, rac)) %>%
-  pivot_wider(names_from = spr, values_from = c(E, M, pred))
-
-y.whsp %>%
-  filter(E_white > 0, E_FALSE > 0) %>%
-  ggplot(aes(x = pred_white / E_white, y = pred_FALSE / E_FALSE)) +
-  geom_point()
-
-# very weird. both over- and under-estimates for whites, but all overestimates for non-hispanics
-
-y.whsp %>%
-  filter(E_TRUE > 0) %>%
-  ggplot(aes(x = E_TRUE, y = pred_TRUE / E_TRUE)) +
-  geom_point()
-
-# We *do* have under-estimates for hispanics, although it still looks like it's mostly over-estimates
-# and it's a consistent over-estimate...
 
