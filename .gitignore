@@ -49,5 +49,6 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-# Scott sandbox folder
+# Scott sandbox folder and files
 99_scott_sandbox/*
+02_downscaling/sandbox_ignore/*
