@@ -10,6 +10,9 @@ library(dplyr)
 library(tidyr)
 library(purrr)
 
+# setting working directory (repo was reorganized after script first run)
+setwd('multnomah/')
+
 # Clear da namespace
 rm(list = ls())
 
@@ -68,7 +71,7 @@ tab.m = merge(tab1.raw, tab2.raw, by = 'TRACTA') %>%
   select(TRACT = TRACTA, PUMA = PUMA5CE, everything())
 
 # PUMA-age-language combinations missing from ACS above
-missing.combos = read.csv('02_downscaling/multnomah_missing_lang_age.csv')
+missing.combos = read.csv('02_downscaling/multnomah_missing_lang_prof_age.csv')
 
 # Crosswalk for language classification
 # langx = read.csv('01_raw_data/lang_xwalk_lanp16.csv')
@@ -195,32 +198,45 @@ y.m %>% distinct(lang) %>% filter(!is.na(lang))
 
 # Getting missing combinations
 
-# Merge this list with numeric LANGUAGE codes used in ACS
+# Merge this list with numeric LANGUAGE and SPEAKENG codes used in PUMS
 missing.combos = merge(
   missing.combos,
   data.frame(
     langd = c(
-      rep('german.west.germanic', 3), 'korean', 'spanish', 'arabic', 
+      'arabic', rep('asian.other', 13), 'chinese', 
+      rep('indo-european.other', 17), 
+      rep('lang.other', 45),
+      rep('german.west.germanic', 3), 'korean', 'spanish', 
       rep('russian.polish.slavic', 9), 'french.haitian.cajun', 'tagalog', 'vietnamese'
     ),
     LANGUAGE = c(
-      2:4, 49, 12, 57,
+      57, setdiff(40:56, c(43, 49, 50, 54)), 43,
+      setdiff(c(2:11, 13:32), c(2:4, 11, 18:26)),
+      c(33:39, 58:94, 96),
+      2:4, 49, 12,
       18:26, 11, 54, 50
     )
   )
-)
+) %>%
+  merge(
+    data.frame(
+      prof = c('prof1', rep('prof2', 3)),
+      SPEAKENG = c(4, 1, 5:6)
+    )
+  ) %>%
+  rename(age = age.out)
 
 # Invert above data frame to get all of the PUMA-(language-age) combos that are
 # present in PUMS
 present.combos = missing.combos %>%
   mutate(missing = TRUE) %>%
-  complete(PUMA, nesting(age, langd, LANGUAGE), fill = list(missing = FALSE)) %>%
+  complete(PUMA, nesting(age, langd, prof, LANGUAGE, SPEAKENG), fill = list(missing = FALSE)) %>%
   filter(!missing) %>%
   select(-missing)
 
 pums.synthetic = merge(
   rbind(acs.m, acs.supp) %>% mutate(age = cut(AGE, breaks = c(0, 18, 55, 60, 85, Inf), right = FALSE)),
-  present.combos %>% select(-langd),
+  present.combos %>% select(-c(langd, prof)),
   all = FALSE
 ) %>%
   select(-age) %>%
@@ -274,7 +290,7 @@ x.m.all = rbind(acs.m, acs.supp, pums.synthetic) %>%
     prof = case_when(
       LANGUAGE %in% 1 ~ NA,
       SPEAKENG %in% 4 ~ 1,
-      SPEAKENG %in% 5:6 ~ 2,
+      SPEAKENG %in% c(1, 5:6) ~ 2,
       .default = NA
     ),
     prof = paste0('prof', prof),
@@ -410,7 +426,7 @@ lang.fits = map2(
 )
 
 
- ### Eval vits:
+### Eval vits:
 lang.cons = map2_df(
   .x = lang.fits,
   .y = split(y.m, ~ PUMA),
@@ -488,7 +504,7 @@ lang.allos = lang.allos %>%
 
 lang.allos
 
-# Merge with PUMS data\
+# Merge with PUMS data
 x.lang.allos = merge(
   x.m.all, lang.allos,
   by.x = c('YEAR', 'SERIAL', 'PERNUM'),
@@ -531,7 +547,7 @@ lang.table1 = lang.age.allos %>%
   merge(
     data.frame(
       langd = c(
-        'arabic', 'chinese', 'engish', 'french.haitian.cajun', 'german.west.germanic',
+        'arabic', 'chinese', 'only.english', 'french.haitian.cajun', 'german.west.germanic',
         'korean', 'other', 'russian.polish.slavic', 'spanish', 'tagalog', 'vietnamese'
       ),
       letter = c('ARB', 'CHN', 'ENG', 'FRN', 'GRM', 'KRN', 'OTH', 'RUS', 'SPN', 'TGL', 'VTN')
@@ -596,3 +612,70 @@ write.csv(
   '03_downscale_out/lim-english_raw.csv'
 )
 
+
+### NEW IN MARCH 2025
+### Language-limited english combinations
+# ALSO these estimates were generated setting "speak no english" to prof <- 'prof2'
+
+lang.leng.table = x.lang.allos %>%
+  filter(!(langd %in% 'only.english'), SPEAKENG %in% c(1, 4:6)) %>%
+  mutate(age.out = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
+  group_by(tract, langd, prof, age.out) %>%
+  summarise(allo = sum(alloc)) %>%
+  ungroup()
+
+lang.leng.table %>%
+  complete(tract, langd, prof, age.out) %>%
+  group_by(tract, langd, age.out) %>%
+  filter(any(is.na(allo))) %>%
+  pivot_wider(names_from = prof, values_from = allo)
+# uh, well, still a ton here
+# looking at the germans though... they all speak english well!
+# oh well...
+# going to call it zero
+  
+lang.leng.table = lang.leng.table %>%
+  complete(tract, langd, prof, age.out) %>%
+  mutate(allo = ifelse(is.na(allo), 0, allo))
+
+# Ah - we also want totals
+lang.table = x.lang.allos %>%
+  filter(!is.na(langd)) %>%
+  mutate(age.out = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
+  group_by(tract, langd, age.out) %>%
+  summarise(allo = sum(alloc)) %>%
+  ungroup()
+
+head(lang.table)
+
+lang.table %>%
+  filter(tract %in% 101) %>%
+  complete(tract, langd, age.out) %>%
+  filter(is.na(allo))
+
+# all language groups included
+
+# Okay - next step is export clean up and re-export
+
+rbind(
+  lang.leng.table %>% rename(group = prof),
+  lang.table %>% mutate(group = 'total') %>% select(tract, langd, group, age.out, allo)
+) %>%
+  write.csv(
+    row.names = FALSE,
+    '03_downscale_out/lang_and_prof_raw_spring2025.csv'
+  )
+
+
+# Making a supp table for generating synthetic pums
+
+# x.lang.allos %>%
+#   filter(!is.na(langd), SERIAL > 0, AGE > 4, !(langd %in% 'only.english')) %>%
+#   mutate(age.out = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
+#   group_by(PUMA, langd, prof, age.out) %>%
+#   summarise(allo = sum(alloc)) %>%
+#   ungroup() %>%
+#   complete(PUMA, langd, prof, age.out) %>%
+#   filter(is.na(allo)) %>%
+#   select(-allo) %>%
+#   write.csv('02_downscaling/multnomah_missing_lang_prof_age.csv', row.names = FALSE)

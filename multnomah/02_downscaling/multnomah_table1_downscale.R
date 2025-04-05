@@ -1,8 +1,11 @@
 # Script for downscaling PUMAs in Multnomah county
 # Tables of interest: Race, Age, Sex, POVPIP (income as percentage of poverty
 # level), Hispanic origin
-# init SN 25 Oct 2024, pushed a working version 30 Oct 2024
-# semi-final 14 Nov 2024
+# - init SN 25 Oct 2024, pushed a working version 30 Oct 2024
+# - semi-final 14 Nov 2024
+# - updated to run with more data and all PUMAs 17 Dec 2024
+# NOTE: using the hacky tip that PUMA-changes in Multnomah County from 2010 to
+# 2020 used the same last two digits, but this *will not hold in general*
 
 ####### == Setup
 ####### ==
@@ -14,7 +17,7 @@ library(ipumsr)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
-# library(purrr)
+library(purrr)
 
 # Clear namespace
 rm(list = ls())
@@ -22,20 +25,30 @@ rm(list = ls())
 ### Read in data
 
 # Get PUMA-tract list of interest (only in Oregon's Multnomah county)
-pum.m = read.csv('01_raw_data/2020_Census_Tract_to_2020_PUMA.csv') %>%
-  filter(STATEFP %in% 41, COUNTYFP %in% 51) %>%
-  select(-STATEFP, COUNTYFP)
+pum.m = rbind(
+  read.csv('01_raw_data/2010_Census_Tract_to_2010_PUMA.csv') %>%
+    filter(STATEFP %in% 41, COUNTYFP %in% 51) %>%
+    select(-c(STATEFP, COUNTYFP)),
+  read.csv('01_raw_data/2020_Census_Tract_to_2020_PUMA.csv') %>%
+    filter(STATEFP %in% 41, COUNTYFP %in% 51) %>%
+    select(-c(STATEFP, COUNTYFP)) 
+) %>%
+  mutate(PUMA2 = gsub('^\\d{2}(\\d{2}$)', '\\1', PUMA5CE))
 
 # Import ACS (PUMS) metadata
-acs.ddi = read_ipums_ddi('01_raw_data/usa_00009.xml')
-# Read in sample and 
+acs.ddi = read_ipums_ddi('01_raw_data/usa_00022.xml')
+# Read in sample and select relevant columns
 acs.m   = acs.ddi %>%
   # Read in data
   read_ipums_micro() %>% 
-  # Subset to just Oregon
-  filter(PUMA %in% unique(pum.m$PUMA5CE)) %>%
+  # Subset to just relevant PUMAs
+  # (ah this won't be super neat...)
+  merge(pum.m %>% distinct(PUMA5CE, PUMA2), by.x = 'PUMA', by.y = 'PUMA5CE') %>%
   # Remove unnecessary columns
-  select(PUMA, SEX, AGE, RACE, RACED, HISPAN, HISPAND, US2022A_POVPIP, PERWT)
+  select(
+    PUMA2, YEAR, SERIAL, PERNUM, PERWT, 
+    SEX, AGE, RACE, RACED, HISPAN, HISPAND, contains('POVPIP'), 
+  )
 
 nrow(acs.m)
 
@@ -49,17 +62,10 @@ tab.m = merge(
   pop.raw %>% select(TRACTA, starts_with('AQ'))
 ) %>%
   mutate(TRACTA = as.numeric(TRACTA)) %>%
-  merge(pum.m %>% select(TRACTCE, PUMA5CE), by.x = 'TRACTA', by.y = 'TRACTCE') %>%
-  select(TRACT = TRACTA, PUMA = PUMA5CE, everything())
+  merge(pum.m %>% distinct(TRACTCE, PUMA2), by.x = c('TRACTA'), by.y = c('TRACTCE')) %>%
+  select(TRACT = TRACTA, PUMA2, everything())
 
 ### Picking a PUMA
-
-# Picking 5105
-
-acs.5 = acs.m %>% filter(PUMA %in% 5105)
-tab.5 = tab.m %>% filter(PUMA %in% 5105)
-
-# BUT I'll keep the PUMA tab in here because it will allow us to split and lapply
 
 ####### == Format and reconcile data
 ####### ==
@@ -67,9 +73,9 @@ tab.5 = tab.m %>% filter(PUMA %in% 5105)
 
 ### Format y (tabular) data
 
-y.5 = tab.5 %>%
+y.m = tab.m %>%
   # Pivot variable columns to rows and merge in variable information
-  pivot_longer(-c(TRACT, PUMA), names_to = 'var_name', values_to = 'value') %>%
+  pivot_longer(-c(TRACT, PUMA2), names_to = 'var_name', values_to = 'value') %>%
   # Merging in variable info
   merge(
     rbind(
@@ -93,7 +99,8 @@ y.5 = tab.5 %>%
     universe = gsub('\\(universe\\:\\s(people\\swho\\sare\\s)*', '', universe),
     universe = gsub('(\\salone)*\\)', '', universe)
   ) %>%
-  # Age-poverty total column is superfluous
+  ######## HEY - ISSUE HERE
+  # Age-poverty total column is superfluous (wait... no it isn't!!!!!!)
   filter(!(grepl('total', var_label) & grepl('poverty', universe))) %>%
   ### Make grand total column
   mutate(is.grand.total = grepl('total', var_label) & grepl('total', universe)) %>%
@@ -152,12 +159,10 @@ y.5 = tab.5 %>%
       rac
     )
   ) %>%
-  group_by(TRACT, is.grand.total, age.pov, pov, sex, age.sex, rac, hsp) %>%
+  group_by(TRACT, PUMA2, is.grand.total, age.pov, pov, sex, age.sex, rac, hsp) %>%
   summarise(E = sum(E), M = sqrt(sum(M^2))) %>%
-  ungroup()
-
-# Need to arrange now...
-y.5 = y.5 %>%
+  ungroup() %>%
+  # Need to arrange rows now
   mutate(
     age.pov.sort = gsub('^(\\d{1,2})\\,\\d{1,2}', '\\1', age.pov) %>% as.numeric(),
     pov.sort     = gsub('^(\\d*\\.*\\d{0,2})\\,\\d*\\.\\d{1,2}', '\\1', pov) %>% as.numeric(),
@@ -205,7 +210,7 @@ y.5 = y.5 %>%
 
 # Get cuts for age and poverty
 
-pov.breaks = y.5 %>%
+pov.breaks = y.m %>%
   distinct(pov) %>%
   filter(grepl('\\d', pov)) %>% 
   mutate(pov = gsub('^(\\d{0,1}\\.{0,1}\\d{0,2}).*', '\\1', pov)) %>%
@@ -213,7 +218,7 @@ pov.breaks = y.5 %>%
   arrange(pov) %>%
   pull(pov)
 
-age.s.breaks = y.5 %>%
+age.s.breaks = y.m %>%
   distinct(age.sex) %>%
   filter(grepl('\\d', age.sex)) %>%
   mutate(age.sex = gsub('^(\\d{1,2}).*', '\\1', age.sex)) %>%
@@ -221,7 +226,7 @@ age.s.breaks = y.5 %>%
   arrange(age.sex) %>%
   pull(age.sex)
 
-age.p.breaks = y.5 %>%
+age.p.breaks = y.m %>%
   distinct(age.pov) %>%
   filter(grepl('\\d', age.pov)) %>%
   mutate(age.pov = gsub('^(\\d{1,2}).*', '\\1', age.pov)) %>%
@@ -231,17 +236,16 @@ age.p.breaks = y.5 %>%
 
 ### Format x data
 
-x.5.all = acs.5 %>%
-  select(-PUMA) %>%
-  filter(
-    # get rid of missing sexes if they exist
-    !(SEX > 2),
-    # get rid of missing hispanic codings
-    !(HISPAN > 5),
-    # get rid of missing POVPIV entries
-    !grepl('[A-Za-z]', US2022A_POVPIP)
+x.m.all = acs.m %>%
+  # First, pivot to get poverty out
+  mutate(across(contains('POVPIP'), function(x) ifelse(x %in% '', NA, x))) %>%
+  pivot_longer(
+    cols = contains('POVPIP'), names_pattern = 'US(20\\d{2})A_POVPIP',
+    names_to = 'POVYEAR', values_to = 'POVPIP'
   ) %>%
-  # Format some data
+  filter(!is.na(POVPIP)) %>%
+  select(-POVYEAR) %>%  
+  # Re-code race to match table
   mutate(
     rac = case_match(
       RACE,
@@ -252,26 +256,38 @@ x.5.all = acs.5 %>%
       8:9 ~ 'Two or more races',
       .default = as_factor(RACE)
     ) %>% tolower(),
-    pov = as.numeric(US2022A_POVPIP) / 100,
+    # Code poverty status
+    POVPIP = ifelse(grepl('[A-Za-z]', POVPIP), NA, POVPIP),
+    pov = as.numeric(POVPIP) / 100,
     # (as character because factor coding has male first)
     sex = as.character(as_factor(SEX)) %>% tolower(),
+    # Bin ages
     age.pov = cut(AGE, breaks = c(age.p.breaks, Inf), right = FALSE),
     age.sex = cut(AGE, breaks = c(age.s.breaks, Inf), right = FALSE),
     pov     = cut(pov, breaks = c(pov.breaks, Inf), right = FALSE),
+    # Re-code hispanic
     hsp = case_when(
+      # hispanic
       HISPAN > 0 ~ 'hisp',
+      # if not hispanic and white, 'nhwh' is non-hispanic white
       RACE %in% 1 ~ 'nhwh',
+      # otherwise, not hispanic not white
       .default = 'nhnw'
     )
-  ) %>%
-  mutate(xidx = 1:nrow(.)) %>%
-  select(xidx, everything())
+  )
 
-x.5 = x.5.all %>%
-  select(xidx, pov, age.pov, age.sex, sex, rac, hsp) %>%
+x.m = x.m.all %>%
+  # NOTE: code breaking here because defunct xidx is used (rather than serial/pernum)
+  # ALSO: need to change the grand total to a 1 if isn't NA
+  select(YEAR, SERIAL, PERNUM, PERWT, PUMA2, pov, age.pov, age.sex, sex, rac, hsp) %>%
+  # note: in future, tidyr's expand() or complete() or something works more elegantly
   rbind(
     expand.grid(
-      xidx = 0,
+      YEAR = 0,
+      SERIAL = 0,
+      PERNUM = 0,
+      PUMA2 = 0,
+      PERWT = 0,
       age.pov = unique(.$age.pov),
       pov = unique(.$pov),
       age.sex = unique(.$age.sex),
@@ -293,7 +309,7 @@ x.5 = x.5.all %>%
   # Add total columns and start pivoting
   # First pivot poverty's age totals
   mutate(
-    total = 1,
+    total = as.numeric(!is.na(pov)),
     age.pov.age.ones = 1,
     age.pov.age.tota = age.pov
   ) %>%
@@ -302,7 +318,7 @@ x.5 = x.5.all %>%
   mutate(age.pov.ones = 1) %>%
   pivot_wider(
     names_from = c(age.pov, pov), values_from = age.pov.ones, 
-    names_sep = '__', values_fill = 0
+    names_sep = '_', values_fill = 0
   ) %>%
   # Next: race- and hispanic-total columns
   mutate(
@@ -318,7 +334,7 @@ x.5 = x.5.all %>%
   ) %>%
   pivot_wider(
     names_from = c(race.sex.rac, race.sex.sex), values_from = race.sex.ones, 
-    names_sep = '__', values_fill = 0
+    names_sep = '_', values_fill = 0
   ) %>%
   # Next pivot out race-age-sex info
   mutate(
@@ -329,7 +345,7 @@ x.5 = x.5.all %>%
   ) %>%
   pivot_wider(
     names_from = c(rac, race.age.sex.sex, race.age.sex.age), values_from = race.age.sex.ones,
-    names_sep = '__', values_fill = 0
+    names_sep = '_', values_fill = 0
   ) %>%
   mutate(
     hisp.total.ones = 1,
@@ -343,25 +359,29 @@ x.5 = x.5.all %>%
   ) %>%
   pivot_wider(
     names_from = c(hisp.sex.hsp, hisp.sex.sex), values_from = hisp.sex.ones,
-    names_sep = '__', values_fill = 0
+    names_sep = '_', values_fill = 0
   ) %>%
   # Finally, pivot out hisp-age-sex info
   mutate(hisp.age.sex.ones = 1) %>%
   pivot_wider(
     names_from = c(hsp, sex, age.sex), values_from = hisp.age.sex.ones,
-    names_sep = '__', values_fill = 0
+    names_sep = '_', values_fill = 0
   ) %>%
-  filter(xidx > 0) %>%
+  filter(SERIAL > 0) %>%
+  # filter out bad/unnecessary columns
+  # no constraints for non-hispanic non-whites
   select(-contains('nhnw')) %>%
-  arrange(xidx)
+  # no constraints for people with un-measurable income
+  select(-matches('\\_NA$')) %>%
+  arrange(YEAR, SERIAL, PERNUM)
  
 data.frame(
-  in.x = names(x.5)[-1],
-  in.y = y.5 %>% 
+  in.x = names(x.m)[-(1:5)],
+  in.y = y.m %>% 
     distinct(is.grand.total, age.pov, pov, rac, hsp, sex, age.sex) %>%
     mutate(across(everything(), ~ ifelse(is.na(.), '', .)))
 ) %>% select(-in.y.is.grand.total) %>% sample_n(15)
-# Looks good
+# currently NAs...
 
 # Constraints each individual should be contributing to (not in order)
 # 1. grand total
@@ -374,6 +394,226 @@ data.frame(
 # 8. sex-race-age
 # 9. sex-hisp-age
 # note that non-hispanic nonwhites (NHNW) don't contribute to 5, 7, 9
+
+####### == Make wrapper and run PMEDM
+####### ==
+####### ==
+
+all.pmedm = map2(
+  .x = split(x.m, ~ PUMA2),
+  .y = split(y.m, ~ PUMA2),
+  .f = function(x.data, y.cons) {
+    
+    (NN = sum(y.cons$E[y.cons$is.grand.total]))
+    (nn = nrow(x.data))
+    (JJ = length(unique(y.cons$TRACT)))
+    (kk = nrow(y.cons) / JJ)
+    
+    yy = y.cons$E / NN
+    vv = (y.cons$M * nn / (NN^2)) %>%
+      .sparseDiagonal(n = length(.)) %>% 
+      as('generalMatrix')
+    
+    xx = kronecker(t(as.matrix(x.data[, -(1:5)])), .sparseDiagonal(n = JJ)) %>%
+      t() %>%
+      as('dgCMatrix')
+    
+    dd = matrix(rep(x.data$PERWT, each = JJ), ncol = 1)
+    dd = dd / sum(dd)
+    
+    pp = PMEDM_solve(xx, yy, vv, dd)
+    
+    pp$pred = pp$pred * NN
+    pp$p = pp$p * NN
+    
+    return(pp)
+    
+  }
+)
+
+
+all.const = map2_df(
+  .x = all.pmedm,
+  .y = split(y.m, ~ PUMA2),
+  .f = function(p, y) mutate(y, pred = p$pred)
+)
+
+# Assess:
+all.const %>%
+  mutate(in.mar = pred < E + M & pred > E - M) %>%
+  ggplot(aes(x = E, colour = in.mar)) +
+  geom_point(aes(y = pred), size = 3) +
+  geom_segment(aes(xend = E, y = E - M, yend = E + M), linewidth = 0.1) +
+  scale_colour_manual(values = c('red', 'black')) +
+  facet_wrap(~ PUMA2)
+
+# Okay some are not in the MOE
+
+all.const %>% filter(pred > E + M | pred < E - M) %>% print(n = nrow(.))
+
+# huh some of these look like they're concentrated in a single tract?
+# lol one is the grand total...?
+# e.g., 4002 is the University of Portland tract and there's an apparent overall
+# over-allocation of 18,24 year olds?
+
+### Allocations
+
+all.alloc = map2(
+  .x = split(x.m, ~ PUMA2), 
+  .y = all.pmedm, 
+  .f = function(x.data, mod.fit) {
+    # x.data: ACS matrix used for extraction
+    # mod.fit: model object (i.e. what is returned pmedm)
+    
+    matr = matrix(
+      data = mod.fit$p, nrow = nrow(x.data), byrow = TRUE,
+      # NOTE the year column here... maybe it would be a good idea to make a
+      # flexible 'id' column
+      dimnames = list(with(x.data, paste(YEAR, SERIAL, PERNUM, sep = '_')), NULL)
+    )
+    
+    return(matr)
+    
+  }
+)
+
+all.alloc = map2(
+  .x = all.alloc,
+  .y = split(y.m, ~ PUMA2),
+  .f = function(p.matrix, y.data) {
+    # p.matrix: output from extract.fun (matrix with rows = PUMS data, cols =
+    # as-yet-unlabelled tracts)
+    # y.data: constraint table, with a column for tract (TRACT)
+    
+    # Assign tract names
+    tracts = y.data %>% distinct(TRACT) %>% pull()
+    dimnames(p.matrix)[[2]] = paste(y.data$PUMA2[1], tracts, sep = '_')
+    
+    # Return matrix
+    return(p.matrix)
+  }
+)
+
+all.x.allocation = merge(
+  x.m.all,
+  all.alloc %>%
+    lapply(
+      function(m) m %>% 
+        as.data.frame() %>%
+      mutate(id = row.names(.)) %>%
+      pivot_longer(-id, names_to = c('PUMA2', 'TRACT'), names_pattern = '(\\d{2})\\_(\\d+)')
+    ) %>%
+      do.call(., what = rbind) %>%
+      separate_wider_delim(id, names = c('YEAR', 'SERIAL', 'PERNUM'), delim = '_')
+)
+
+pov.x.allocation = all.x.allocation %>%
+  # I think for the purpose of the table missing POVPIP values are not helpful
+  filter(!is.na(POVPIP)) %>%
+  mutate(
+    age.out = cut(AGE, breaks = c(0, 18, 55, 60, 85, Inf), right = FALSE),
+    pov.out = cut(as.numeric(POVPIP) / 100, breaks = c(0, 1, 2.5, 4, Inf), right = FALSE),
+  )
+
+pov.table1 = pov.x.allocation %>%
+  group_by(PUMA2, TRACT, age.out, pov.out) %>%
+  summarise(n.est = sum(value)) %>%
+  ungroup()
+
+# a test:
+pov.table1 %>% 
+  # filter(!grepl('\\[4', pov.out)) %>% 
+  pivot_wider(names_from = age.out, values_from = n.est, names_prefix = 'a') %>% 
+  print(n = 20)
+
+pov.table1 %>%
+  # filter(!grepl('\\[4', pov.out)) %>% 
+  pivot_wider(names_from = age.out, values_from = n.est, names_prefix = 'a') %>%
+  filter(if_any(starts_with('a'), ~ is.na(.)))
+# all age-pov groups are represented
+
+# Need to modify poverty...
+# Cumulative sums and get rid of 400%+
+
+pov.table1 = pov.table1 %>%
+  # Rename a column
+  rename(allo = n.est, tract = TRACT) %>%
+  # Remove PUMA column
+  select(-PUMA2) %>%
+  # Get rid of highest poverty group
+  filter(!grepl('\\[4', pov.out)) %>%
+  mutate(pov.out = as.numeric(gsub('\\[.+\\,(.+)\\)$', '\\1', pov.out))) %>%
+  group_by(tract, age.out) %>%
+  mutate(
+    allo = cumsum(allo),
+    table.code = paste0('POV', 100 * pov.out)
+  ) %>%
+  ungroup() %>%
+  select(-pov.out)
+
+#-- EXPORT
+
+write.csv(
+  pov.table1, row.names = FALSE,
+  '03_downscale_out/povall_raw.csv'
+)
+
+#### BIPOC poverty table
+
+pov.table2 = pov.x.allocation %>%
+  filter(!hsp %in% 'nhwh') %>%
+  group_by(PUMA2, TRACT, age.out, pov.out) %>%
+  summarise(n.est = sum(value)) %>%
+  ungroup()
+
+pov.table2 %>% 
+  # filter(!grepl('\\[4', pov.out)) %>% 
+  pivot_wider(names_from = age.out, values_from = n.est, names_prefix = 'a') %>% 
+  print(n = 20)
+
+pov.table2 %>% 
+  # filter(!grepl('\\[4', pov.out)) %>% 
+  pivot_wider(names_from = age.out, values_from = n.est, names_prefix = 'a') %>%
+  filter(if_any(starts_with('a'), ~ is.na(.))) %>%
+  distinct(PUMA2, .keep_all = TRUE)
+
+
+### BIPOC all table
+
+bipoc.x.allocation = all.x.allocation %>%
+  # I think for the purpose of the table missing POVPIP values are not helpful
+  filter(!is.na(POVPIP), !hsp %in% 'nhwh') %>%
+  mutate(age.out = cut(AGE, breaks = c(0, 18, 55, 60, 85, Inf), right = FALSE))
+
+bipoc.table1 = bipoc.x.allocation %>%
+  group_by(PUMA2, TRACT, age.out) %>%
+  summarise(allo = sum(value)) %>%
+  ungroup()
+
+bipoc.table1 %>%
+  pivot_wider(names_from = age.out, values_from = allo, names_prefix = 'a') %>%
+  filter(if_any(starts_with('a'), ~ is.na(.))) %>%
+  distinct(PUMA2, .keep_all = TRUE)
+# great - every age group represented
+
+bipoc.table1 = bipoc.table1 %>%
+  select(-PUMA2) %>%
+  rename(tract = TRACT) %>%
+  mutate(table.code = 'RET_B')
+
+write.csv(
+  bipoc.table1, row.names = FALSE,
+  '03_downscale_out/bipocall_raw.csv'
+)
+
+########################################################
+########################################################
+########################################################
+
+####### == ============== === #######
+####### == OLD CODE BELOW === #######
+####### == ============== === #######
+
 
 ####### == Run PMEDM
 ####### ==
