@@ -53,7 +53,7 @@ reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
 
 pums.ancestry = pums.raw %>%
   # Get ancestry data
-  select(CBSERIAL, PERNUM, PUMA, AGE, ANCESTR1, ANCESTR2, starts_with('DIFF')) %>%
+  select(CBSERIAL, PERNUM, PUMA, AGE, GQ, OCC, ANCESTR1, ANCESTR2, starts_with('DIFF')) %>%
   mutate(
     # Ancestry (this one will be a doozy!)
     across(
@@ -112,9 +112,10 @@ pums.ancestry = pums.raw %>%
       )
     ),
     has.diff = (DIFFREM > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1) | (DIFFCARE > 1),
+    in.disb.univ = !(OCC %in% 9800:9850) & !(GQ %in% 3),
     age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
   ) %>%
-  select(-c(starts_with('DIFF'), AGE)) %>%
+  select(-c(starts_with('DIFF'), AGE, GQ, OCC)) %>%
   # Convert to long form and collapse ancestries
   pivot_longer(starts_with('ANCESTR'), names_to = 'varb', values_to = 'ancestry') %>%
   filter(!is.na(ancestry)) %>%
@@ -133,16 +134,16 @@ missing.ancestry = pums.ancestry %>%
   filter(is.na(n))
 
 # I'll include present counts here just because...
-missing.age.reald = pums.ancestry %>%
-  filter(has.diff) %>%
+missing.age.reald.diff = pums.ancestry %>%
+  filter(has.diff, in.disb.univ) %>%
   count(PUMA, age, reald) %>%
   complete(PUMA, age, reald) %>%
   group_by(age, reald) %>%
   filter(any(is.na(n))) %>%
   ungroup()
 
-missing.age.reald %>% filter(is.na(n)) %>% nrow()
-missing.age.reald %>% pivot_wider(names_from = PUMA, values_from = n, names_prefix = 'p')
+missing.age.reald.diff %>% filter(is.na(n)) %>% nrow()
+missing.age.reald.diff %>% pivot_wider(names_from = PUMA, values_from = n, names_prefix = 'p')
 # Okay - entirely missing 'Other' age 85+, age 55-60, age 0-18
 # Otherwise... only one NHPI 85+ to copy
 # 57 missing combos on the whole.
@@ -156,7 +157,7 @@ missing.age.reald %>% pivot_wider(names_from = PUMA, values_from = n, names_pref
 # Set seed for reproducibility
 set.seed(221505)
 
-reassigned.serials = missing.age.reald %>%
+reassigned.serials = missing.age.reald.diff %>%
   # Getting just the age-race combos we have records for
   filter(!is.na(n)) %>%
   select(-n) %>%
@@ -167,7 +168,7 @@ reassigned.serials = missing.age.reald %>%
   select(CBSERIAL, PERNUM, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
-  merge(missing.age.reald %>% filter(is.na(n)) %>% select(-n)) %>%
+  merge(missing.age.reald.diff %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
   slice_sample(n = 1) %>%
@@ -180,7 +181,7 @@ head(reassigned.serials)
 # (n.x and n.y should be the same)
 merge(
   reassigned.serials %>% count(reald, age),
-  missing.age.reald %>% filter(is.na(n)) %>% count(age, reald),
+  missing.age.reald.diff %>% filter(is.na(n)) %>% count(age, reald),
   by = c('reald', 'age'), all = TRUE
 )
 
