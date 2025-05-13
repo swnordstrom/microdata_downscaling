@@ -10,24 +10,37 @@ rm(list = ls())
 # Read in data and estimates
 
 # Read in PUMS and subset to MultCo
-pums = read_ipums_ddi('multnomah/01_raw_data/usa_00051.xml') %>%
+pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00051.xml') %>%
   # Read in data
   read_ipums_micro() %>%
   # Subset geography
   filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16))) %>%
-  select(CBSERIAL, PERNUM, AGE, SEX, OCC, GQ, starts_with('DIFF'))
+  select(CBSERIAL, PERNUM, PUMA, AGE, SEX, OCC, GQ, starts_with('DIFF'))
 
-# Read in estimtes
-weights = read.csv('multnomah/03_downscale_out/disability_all_weights_redone.csv')
+# Synthetic pums (generated in `make_reld_ancestry_synthetic_records.R`)
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_synthetic_records.csv') %>%
+  # Remove the ancestry-only records
+  filter(!is.na(CBSERIAL)) %>%
+  # Merge in with PUMS to get other data
+  merge(pums.raw %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
+  select(names(pums.raw)) %>%
+  # Actually... it will be eaiser if we negate the serial numbers below
+  # mutate(CBSERIAL = - 1 * CBSERIAL) %>%
+  # Remove duplicates
+  # (these cause issues when getting the disability-all varb and the duplicates with weighting get re-assigned later anyway)
+  distinct(CBSERIAL, PERNUM, .keep_all = TRUE)
 
-# Read in reald for allocation
+# Read in and process the reald assignments
 reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
+  # modify serial number for merge
   mutate(
     CBSERIAL = gsub('GQ', '01', serialno),
     CBSERIAL = gsub('HU', '00', CBSERIAL),
     CBSERIAL = as.numeric(CBSERIAL)
   ) %>%
+  # change person number identifier for merge
   rename(PERNUM = sporder) %>%
+  # assign reald categories
   mutate(
     reald.cat = case_match(
       reldpri,
@@ -35,7 +48,7 @@ reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
       c('NHPIoth', 'Cham', 'Samoan', 'COFA', 'Marshall', 'NatHaw') ~ 'NHPI',
       c('WestEur', 'WhiteOth', 'Slavic', 'EastEur') ~ 'White',
       c('AmInd', 'AlaskNat', 'LatInd') ~ 'AmInd',
-      c('AfrAm', 'African', 'Caribbean', 'Ethiopian', 'Somali') ~ 'Black',
+      c('AfrAm', 'African', 'Caribbean', 'Ethiopian', 'Somali') ~ 'Black', 
       c('MidEast', 'NoAfr') ~ 'MENA',
       c('Chinese', 'Filipino', 'Cambodian', 'Vietnamese', 'Korean', 
         'Japanese', 'Myanmar', 'AsianInd', 'SoAsian', 'Hmong', 
@@ -44,12 +57,23 @@ reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
     )
   )
 
+# Read in estimates
+weights = read.csv('multnomah/03_downscale_out/disability_all_weights_redone.csv')
+
 # Get MultCo tract geographies for plots
 multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # ==============================================================
 # Merge and process data
+
+# Add reald categories to both PUMS datasets and rbind them together
+# (it's easier to add reald before they are combined)
+pums = rbind(
+  merge(pums.raw, reald %>% select(CBSERIAL, PERNUM, reald.cat)),
+  merge(synthetic.pums, reald %>% select(CBSERIAL, PERNUM, reald.cat)) %>%
+    mutate(CBSERIAL = -1 * CBSERIAL)
+)
 
 # Adding in the disability variable here because it's slow and will be slower if
 # we do it after the merge
@@ -58,6 +82,7 @@ pums = pums %>%
   pivot_longer(starts_with('DIFF'), names_to = 'diff', values_to = 'value') %>%
   group_by(CBSERIAL, PERNUM) %>%
   mutate(has.diff = any(value > 1)) %>%
+  ungroup() %>%
   pivot_wider(names_from = diff, values_from = value)
 
 # Combine with a merge
@@ -67,8 +92,7 @@ pums.weights = merge(
 ) %>%
   # Remove institutionalized and non-civilian population
   filter(!(OCC %in% 9800:9850) & !(GQ %in% 3)) %>%
-  select(-c(OCC, GQ)) %>%
-  merge(reald %>% select(CBSERIAL, PERNUM, reald.cat))
+  select(-c(OCC, GQ))
 
 # Some records lost due to removing non-civilian individuals
 
@@ -442,45 +466,83 @@ mean(indp.disb$A)
 # ==============================================================
 # Table: Disabiltiy yes/no by REALD
 
-# Okay... first thing I want to do is look for missing REALD-disability-PUMA combos...
-# (especially by age group... woof)
-pums.weights %>%
-  filter(has.diff) %>%
-  separate_wider_delim(tract, names = c('puma', 'tract'), delim = '_') %>%
-  distinct(CBSERIAL, PERNUM, puma, reald.cat) %>%
-  count(reald = reald.cat, puma) %>%
-  pivot_wider(names_from = puma, values_from = n, names_prefix = 'p') %>%
-  print(n = nrow(.))
-# Okay... missing a disabled person with 'Other' reald in puma 5105
+reld.disb = pums.weights %>%
+  group_by(tract, has.diff, raceth = reald.cat) %>%
+  summarise(TOTAL = sum(alloc)) %>%
+  ungroup() %>%
+  mutate(tract = as.numeric(gsub('^\\d{4}\\_', '', tract))) %>%
+  pivot_wider(names_from = has.diff, names_prefix = 'diff', values_from = TOTAL)
 
-# But also, will want to look at the reld-age combos by group as well...
+head(reld.disb)
 
-pums.weights %>%
-  filter(has.diff) %>%
-  separate_wider_delim(tract, names = c('puma', 'tract'), delim = '_') %>%
-  distinct(CBSERIAL, PERNUM, puma, reald.cat, agebin) %>%
-  count(reald = reald.cat, agebin, puma) %>%
-  complete(reald, agebin, puma) %>%
-  filter(is.na(n)) %>%
-  print(n = nrow(.))
-# Unsurprisingly, many of these as well...
+### Visualize
+reld.disb.plot = merge(multco.tracts, reld.disb) %>%
+  group_by(tract, raceth) %>%
+  mutate(p.diff = diffTRUE / (diffTRUE + diffFALSE)) %>%
+  ungroup()
 
-pums.weights %>%
-  filter(has.diff) %>%
-  separate_wider_delim(tract, names = c('puma', 'tract'), delim = '_') %>%
-  distinct(CBSERIAL, PERNUM, puma, reldpri, agebin) %>%
-  count(reald = reldpri, agebin, puma) %>%
-  complete(reald, agebin, puma) %>%
-  filter(is.na(n))
-# over 600 of these hnghh
-# Are there any age groups that are just completely missing
+ggplot(reld.disb.plot) +
+  geom_sf(aes(fill = p.diff)) +
+  scale_fill_viridis_c('Disability') +
+  facet_wrap(~ raceth, ncol = 2) +
+  theme_void() +
+  theme(legend.position = 'top')
+  
+ggplot(reld.disb.plot) +
+  geom_sf(aes(fill = diffTRUE)) +
+  scale_fill_viridis_c('Disability') +
+  facet_wrap(~ raceth, ncol = 2) +
+  theme_void() +
+  theme(legend.position = 'top')
 
-pums.weights %>%
-  filter(has.diff) %>%
-  separate_wider_delim(tract, names = c('puma', 'tract'), delim = '_') %>%
-  distinct(CBSERIAL, PERNUM, puma, reald.cat, agebin) %>%
-  count(reald = reald.cat, agebin) %>%
-  complete(reald, agebin) %>%
-  filter(is.na(n))
-# Okay, there are zero disabled "other" individuals in three age bins across the dataset
+reld.disb = reld.disb %>%
+  select(-diffFALSE) %>%
+  mutate(
+    raceth = case_match(
+      raceth,
+      'White' ~ 'W',
+      'Asian' ~ 'A',
+      'AmInd' ~ 'N',
+      'Black' ~ 'B',
+      'NHPI'  ~ 'P',
+      'MENA'  ~ 'E',
+      'HispLat' ~ 'H',
+      'Other' ~ 'O'
+    )
+  ) %>%
+  pivot_wider(names_from = raceth, values_from = diffTRUE)
+
+  
+# ==============================================================
+# Table: Disabiltiy yes/no by REALD
+
+reld.age.disb = pums.weights %>%
+  group_by(tract, agebin, has.diff, raceth = reald.cat) %>%
+  summarise(TOTAL = sum(alloc)) %>%
+  ungroup() %>%
+  mutate(tract = as.numeric(gsub('^\\d{4}\\_', '', tract))) %>%
+  pivot_wider(names_from = has.diff, names_prefix = 'diff', values_from = TOTAL, values_fill = 0)
+
+head(reld.age.disb)
+
+### Visualize
+# too much to visualize
+
+reld.age.disb = reld.age.disb %>%
+  select(-diffFALSE) %>% 
+  mutate(
+    raceth = case_match(
+      raceth,
+      'White' ~ 'W',
+      'Asian' ~ 'A',
+      'AmInd' ~ 'N',
+      'Black' ~ 'B',
+      'NHPI'  ~ 'P',
+      'MENA'  ~ 'E',
+      'HispLat' ~ 'H',
+      'Other' ~ 'O'
+    ),
+    agebin = LETTERS[as.numeric(agebin)]
+  ) %>%
+  pivot_wider(names_from = c(raceth, agebin), values_from = diffTRUE)
 
