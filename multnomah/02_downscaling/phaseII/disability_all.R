@@ -35,26 +35,33 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
 # Read in synthetic records
-synthetic.records = read.csv('multnomah/02_downscaling/reld_ancestry_synthetic_records.csv') %>%
-  mutate(
-    CBSERIAL = -1 * (1:nrow(.)),
-    PERNUM = 1,
-    PERWT = 1
-  )
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_synthetic_records.csv') # %>%
+  # mutate(
+  #   CBSERIAL = -1 * (1:nrow(.)),
+  #   PERNUM = 1,
+  #   PERWT = 1
+  # )
 
 # ==============================================================
 # Combine and massage data (before formatting for data)
 
+### Handle tabular constraints
+
+# Format ACS tables and merge in to get PUMAs for each tract
 acs.tab = merge(
   acs.tab.raw1 %>% select(TRACTA, matches('[EM]\\d{3}$')),
   acs.tab.raw2 %>% select(TRACTA, matches('[EM]\\d{3}$')),
   by = 'TRACTA'
 ) %>%
+  # Rename tract column for merge
   mutate(tract = as.numeric(TRACTA)) %>%
   select(-TRACTA) %>%
+  # Merge to get PUMAs
   merge(puma.tract %>% filter(puma > 5000) %>% select(tract, puma))
 
 head(acs.tab)
+
+# Do some label name/constraint massaging 
 
 acs.tab = acs.tab %>%
   pivot_longer(-c(puma, tract), names_to = 'var_name', values_to = 'var_value') %>%
@@ -77,7 +84,16 @@ acs.tab = acs.tab %>%
     var_label = gsub('under', '00 to', var_label),
     var_label = gsub('\\s(\\d{1})\\s', ' 0\\1 ', var_label)
   )
+
+# Format the ancestry table
+ancestry.tab = ancestry.tab %>%
+  mutate(tract = as.numeric(gsub('\\d+US41051', '', GEOID))) %>%
+  merge(puma.tract %>% select(tract, puma)) %>%
+  select(tract, puma, var_label = reald, E = ESTIMATE, M = MOE) 
+
   
+### Working with PUMS
+
 # Get only relevant columns for PUMS and standardize the PUMA labels
 pums = pums.raw %>%
   select(
@@ -91,13 +107,31 @@ pums = pums.raw %>%
 nrow(pums)
 table(pums$PUMA)
 
-# Format the ancestry table
-ancestry.tab = ancestry.tab %>%
-  mutate(tract = as.numeric(gsub('\\d+US41051', '', GEOID))) %>%
-  merge(puma.tract %>% select(tract, puma)) %>%
-  select(tract, puma, var_label = reald, E = ESTIMATE, M = MOE) 
+# Add synthetic records to PUMS
+synthetic.pums = synthetic.records %>%
+  filter(!is.na(CBSERIAL)) %>%
+  merge(pums %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
+  select(names(pums)) %>%
+  mutate(
+    CBSERIAL = - 1 * CBSERIAL,
+    PERWT = 1,
+    HHWT = 1
+  )
 
-# something in here needs fixing - tract labels (removing the period - keep as character?)
+pums = rbind(pums, synthetic.pums)
+
+# Format the other ancestry dummy record sfor controls
+ancestry.dummies = synthetic.records %>%
+  filter(is.na(CBSERIAL)) %>%
+  mutate(
+    # Add in serial number, person number, weight
+    CBSERIAL = -1 * (1:nrow(.)),
+    PERNUM = 1,
+    PERWT = 1,
+  ) %>%
+  # Arrange first four columns
+  select(PUMA, CBSERIAL, PERNUM, PERWT, ancestry) 
+
 
 # ==============================================================
 # Now start formatting data
@@ -486,24 +520,24 @@ x.anc.mat = pums %>%
 dim(x.anc.mat)
 
 # Create synthetic records
-x.mat.synthetic = synthetic.records %>%
+x.mat.dummies = ancestry.dummies %>%
   # Get disability, race, etc. columns
   cbind(
-    x.disb.mat %>% slice(1:nrow(synthetic.records)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
+    x.disb.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
   ) %>%
   # Get ancestry columns
   cbind(
-    x.anc.mat %>% slice(1:nrow(synthetic.records)) %>% select(Other:unclassified) %>% mutate(across(everything(), ~ 0))
+    x.anc.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(Other:unclassified) %>% mutate(across(everything(), ~ 0))
   ) %>%
   # Add in fields for hitting constraints
   mutate(
     # Race
-    rac.amind = as.numeric(race  %in% 'amind'),
-    rac.black = as.numeric(race %in% 'blk'),
-    rac.nhpac = as.numeric(race %in% 'pacis'),
-    rac.white = as.numeric(race %in% 'wht'),
+    # rac.amind = as.numeric(race  %in% 'amind'),
+    rac.black = as.numeric(grepl('Somali', ancestry)),
+    # rac.nhpac = as.numeric(race %in% 'pacis'),
+    rac.white = as.numeric(grepl('[Aa]rab', ancestry)),
     # Ancestry
-    Other = as.numeric(ancestry %in% 'Other'),
+    # Other = as.numeric(ancestry %in% 'Other'),
     ReSomalian = as.numeric(ancestry %in% 'ReSomalian'),
     Other.arab = as.numeric(ancestry %in% 'Other.arab'),
     # Count towards total
@@ -516,15 +550,15 @@ x.mat.synthetic = synthetic.records %>%
     not.hisp = 1
   ) %>%
   # Deselect columns
-  select(-c(race, ancestry, reld))
+  select(-ancestry)
 
-x.mat.synthetic[,-(1:4)] %>% apply(1, sum)
-x.mat.synthetic[,-(1:4)] %>% apply(2, sum) %>% (\(x) x[x>0])
+x.mat.dummies[,-(1:4)] %>% apply(1, sum)
+x.mat.dummies[,-(1:4)] %>% apply(2, sum) %>% (\(x) x[x>0])
     
 # Combine into a single x-matrix
 x.mat = merge(x.disb.mat, x.anc.mat) %>%
   arrange(CBSERIAL, PERNUM) %>%
-  rbind(x.mat.synthetic)
+  rbind(x.mat.dummies)
 
 head(x.mat)
 nrow(x.mat)
