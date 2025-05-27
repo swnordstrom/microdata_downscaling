@@ -46,3 +46,23 @@ tab_extract %>%
   wait_for_extract() %>%
   download_extract(download_dir = 'multnomah/01_raw_data/')
 # Downloaded as extract # 33
+
+# You know, we want to have more fine-grained poverty data
+tab_extract = define_extract_nhgis(
+  description = 'tract-level age+sex+race+pov for controls, draw 2 w/ more fine-grained data',
+  datasets = map2(
+    .x = list('2019_2023_ACS5a', '2019_2023_ACS5b'),
+    .y = list(c('B01001', paste0('B020', c(paste0('0', 8:9), 10:13)), 'B03003'), 'B17024'),
+    ~ ds_spec(
+      name = .x,
+      data_tables = .y,
+      geog_levels = 'tract'
+    )
+  )
+)
+
+tab_extract %>%
+  submit_extract() %>%
+  wait_for_extract() %>%
+  download_extract(download_dir = 'multnomah/01_raw_data/')
+# Downloaded as extract 34
