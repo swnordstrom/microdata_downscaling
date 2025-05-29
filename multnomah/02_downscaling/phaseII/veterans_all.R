@@ -30,9 +30,8 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 # Read in the aggregated ancestry counts
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
-# Synthetic records
 # Get synthetic records (PUMS and dummy)
-# synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv')
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
 
 # ==============================================================
 # Merge data products together and do some pre-processing
@@ -102,7 +101,7 @@ ancestry.tab = ancestry.tab %>%
 # Combine the acs tables into one:
 acs.tab = rbind(acs.tab, ancestry.tab)
 
-### 
+### Format PUMS
 # Get only relevant columns for PUMS and standardize the PUMA labels
 pums = pums.raw %>%
   select(
@@ -111,6 +110,32 @@ pums = pums.raw %>%
       STRATA, HISPAND, ANCESTR1D, ANCESTR2D, VETSTATD, MULTGEND
     )
   )
+
+# # Add synthetic records to PUMS
+# synthetic.pums = synthetic.records %>%
+#   filter(!is.na(CBSERIAL)) %>%
+#   merge(pums %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
+#   select(names(pums)) %>%
+#   mutate(
+#     CBSERIAL = - 1 * 1:nrow(.),
+#     PERWT = 1,
+#     HHWT = 1
+#   )
+
+
+# pums = rbind(pums, synthetic.pums)
+
+# Format the other ancestry dummy record sfor controls
+ancestry.dummies = synthetic.records %>%
+  filter(is.na(CBSERIAL)) %>%
+  mutate(
+    # Add in serial number, person number, weight
+    CBSERIAL = -1000 * (1:nrow(.)),
+    PERNUM = 1,
+    PERWT = 1,
+  ) %>%
+  # Arrange first four columns
+  select(PUMA, CBSERIAL, PERNUM, PERWT, ancestry) 
 
 # ==============================================================
 # Get matrices/vectors for PMED-M
@@ -534,6 +559,42 @@ x.mat = x.tab %>%
   arrange(CBSERIAL, PERNUM) %>%
   select(CBSERIAL, PERNUM, PERWT, PUMA, total:last_col())
 
+# Make ancestry dummy records
+# Create synthetic records
+x.mat.dummies = ancestry.dummies %>%
+  # Get disability, race, etc. columns
+  cbind(
+    x.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
+  ) %>%
+  # Add in fields for hitting constraints
+  mutate(
+    # Race
+    rac.black = as.numeric(grepl('Somali', ancestry)),
+    rac.white = as.numeric(grepl('[Aa]rab', ancestry)),
+    # Ancestry
+    # Other = as.numeric(ancestry %in% 'Other'),
+    ReSomalian = as.numeric(ancestry %in% 'ReSomalian'),
+    Other.arab = as.numeric(ancestry %in% 'Other.arab'),
+    # Count towards total
+    total = 1,
+    # Won't do any other controls... hopefully this doesn't cause a problem
+    # Assume all are non-hispanic
+    nonhisp = 1
+  ) %>%
+  # Deselect columns
+  select(-ancestry)
+
+# Make duplicated synthetic records
+x.mat.synthetic = merge(
+  synthetic.records %>% filter(!is.na(CBSERIAL)) %>% select(CBSERIAL, PERNUM, PUMA),
+  x.mat %>% select(-PUMA)
+) %>%
+  arrange(CBSERIAL, PERNUM, PUMA) %>%
+  mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1, PERWT = 1)
+
+
+x.mat = rbind(x.mat, x.mat.dummies, x.mat.synthetic)
+
 nrow(x.mat) # aw yea
 
 ncol(x.mat) - 4
@@ -723,3 +784,61 @@ x.tab %>%
 # okay there is one (ONE) issue here...
 # GQ for one PUMA (5102) being under-counted in the PUMS
 # I wonder if it has to do with the weird GQ == 5 place...
+
+
+# ==============================================================
+# Assign weights and export
+
+allo.weights = map2(
+  .x = split(x.mat, ~ PUMA),
+  .y = fit.list,
+  .f =  function(x.data, mod.fit) {
+    # x.data: ACS matrix used for extraction
+    # mod.fit: model object (i.e. what is returned pmedm)
+    
+    matr = matrix(
+      data = mod.fit$p, nrow = nrow(x.data), byrow = TRUE,
+      # NOTE the year column here... maybe it would be a good idea to make a
+      # flexible 'id' column
+      dimnames = list(with(x.data, paste(CBSERIAL, PERNUM, sep = '_')), NULL)
+    )
+    
+    return(matr)
+  }
+)
+
+allo.weights = map2(
+  .x = allo.weights,
+  .y = split(y.tab, ~ puma),
+  function(p.matrix, y.data) {
+    # p.matrix: output from extract.fun (matrix with rows = PUMS data, cols =
+    # as-yet-unlabelled tracts)
+    # y.data: constraint table, with a column for tract (TRACT)
+    
+    # Assign tract names
+    tracts = y.data %>% distinct(tract) %>% pull()
+    dimnames(p.matrix)[[2]] = paste(y.data$puma[1], tracts, sep = '_')
+    
+    # Normalize by population size
+    pop.size = y.data %>% filter(vartype %in% 'is.total') %>% pull(E) %>% sum()
+    p.matrix = p.matrix * pop.size
+    
+    # Return matrix
+    return(p.matrix)
+  }
+)
+
+allo.weights = allo.weights %>%
+  lapply(
+    FUN = function(m) {
+      data.frame(m) %>%
+        mutate(id = row.names(.)) %>%
+        pivot_longer(-id, names_to = 'tract', values_to = 'alloc')
+    }
+  ) %>%
+  do.call(what = rbind) %>%
+  mutate(tract = gsub('X', '', tract)) %>%
+  separate_wider_delim(id, delim = '_', names = c('cbserial', 'pernum')) %>%
+  mutate(across(c(cbserial, pernum), as.numeric)) 
+
+write.csv(allo.weights, row.names = FALSE, file = 'multnomah/03_downscale_out/vets-and-housing_all_weights.csv')
