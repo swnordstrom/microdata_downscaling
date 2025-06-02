@@ -10,7 +10,7 @@ library(tidyr)
 
 rm(list = ls())
 
-# -------------------------------------------------------------------
+# ==============================================================
 # Read in reld assignments for ACS
 
 reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
@@ -38,24 +38,18 @@ reald = read.csv('multnomah/01_raw_data/5acs23_orwa_reldpri.csv') %>%
 
 # ==============================================================
 # ==============================================================
-# # Disability data
+# # Missing ancestry combos and other fix
 
 # Read in disability PUMS and subset to MultCo
 pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00051.xml') %>%
   # Read in data
   read_ipums_micro() %>%
   # Subset geography
-  filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
+  filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16))) 
 
-# -------------------------------------------------------------------
-# Get a data frame with ancestry(s) and reld category assigned for each record
-
-# also need to get the disability status in this table.
-# (and age, lol)
-
+# Get ancestry for each individual
 pums.ancestry = pums.raw %>%
-  # Get ancestry data
-  select(CBSERIAL, PERNUM, PUMA, AGE, GQ, OCC, ANCESTR1, ANCESTR2, starts_with('DIFF')) %>%
+  select(CBSERIAL, PERNUM, PUMA, PERWT, AGE, ANCESTR1, ANCESTR2) %>%
   mutate(
     # Ancestry (this one will be a doozy!)
     across(
@@ -112,12 +106,9 @@ pums.ancestry = pums.raw %>%
           603:799, 808:870, 900:924, 983:995, 998) ~ 'Other',
         .default = NA
       )
-    ),
-    has.diff = (DIFFREM > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1) | (DIFFCARE > 1),
-    in.disb.univ = !(OCC %in% 9800:9850) & !(GQ %in% 3),
-    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
+  ),
+  age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
   ) %>%
-  select(-c(starts_with('DIFF'), AGE, GQ, OCC)) %>%
   ### Get ancestry group counts
   # this step is heinously slow, probably not programmed super well...
   # Pivot out to get ancestry and counts in two columns
@@ -149,27 +140,98 @@ pums.ancestry = pums.raw %>%
   # # Now merge in reld
   merge(reald %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat))
 
-head(pums.ancestry)
-
-# -------------------------------------------------------------------
-# Assess missing combos
-
+# Get missing ancestries
 missing.ancestry = pums.ancestry %>%
   count(PUMA, ancestry) %>%
   complete(PUMA, ancestry) %>% 
-  filter(is.na(n))
+  group_by(ancestry) %>%
+  filter(any(is.na(n))) %>%
+  ungroup()
+  
+missing.ancestry
+
+######## Use resampling from PUMS to get dummy individuals
+# Workflow for doing this
+# - Merge in the rows in this data frame where records are present (n is not NA) with the PUMS to get serial numbers of individuals in the race/age group
+# - Drop the PUMA column from these records and merge them in with the PUMA-age-race combos that need records
+#   (this will duplicate each record once for each PUMA we need a sample from)
+# - Then sample ONE record for each age-race-puma combination
+
+# Set seed for reproducibility
+set.seed(979887)
+
+reassigned.ancestry.serials = missing.ancestry %>%
+  # Getting just the age-race combos we have records for
+  filter(!is.na(n)) %>%
+  select(-n) %>%
+  # Merge to get all records (serial numbers most importantly)
+  merge(pums.ancestry, all.x = TRUE) %>%
+  # Remove unnecessary columns (importantly, the PUMA column)
+  select(CBSERIAL, PERNUM, PERWT, ancestry, reald) %>%
+  # Now, merge back in with the list of PUMA-age-race columns we need
+  # (this is the step where records get duplicated)
+  merge(missing.ancestry %>% filter(is.na(n)) %>% select(-n)) %>%
+  # Now sample one record per PUMA-age-race column
+  group_by(ancestry, reald, PUMA) %>%
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  select(-PERWT) %>%
+  ungroup()
+
+reassigned.ancestry.serials
+
+### One more individual to add in:
+# Need a Somali aged 18-54 not in GQ for PUMA 5103
+
+# I looked, two options: 2019001346008_4 and 2021000377698_5
+# I'm going with 2021
+
+reassigned.ancestry.serials = reassigned.ancestry.serials %>%
+  rbind(
+    data.frame(
+      ancestry = 'ReSomalian', CBSERIAL = 2019001346008, PERNUM = 4, 
+      reald = 'Black', PUMA = 5103
+    )
+  )
+
+reassigned.ancestry.serials
+merge(pums.raw, reassigned.ancestry.serials %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM'))
+
+
+# ==============================================================
+# ==============================================================
+# # Disability data
+
+# Read in disability PUMS and subset to MultCo
+pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00051.xml') %>%
+  # Read in data
+  read_ipums_micro() %>%
+  # Subset geography
+  filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
+
+pums.disability = pums.raw %>%
+  # Add some needed columns
+  mutate(
+    has.diff = (DIFFREM > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1) | (DIFFCARE > 1),
+    in.disb.univ = !(OCC %in% 9800:9850) & !(GQ %in% 3),
+    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
+  ) %>%
+  # # Now merge in reld
+  merge(reald %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat))
+
+head(pums.disability)
+
 
 # I'll include present counts here just because...
-missing.age.reald.diff = pums.ancestry %>%
+pums.missing.diff.reald = pums.disability %>%
   filter(has.diff, in.disb.univ) %>%
   count(PUMA, age, reald) %>%
   complete(PUMA, age, reald) %>%
-  group_by(age, reald) %>%
+  group_by(reald, age) %>%
   filter(any(is.na(n))) %>%
   ungroup()
 
-missing.age.reald.diff %>% filter(is.na(n)) %>% nrow()
-missing.age.reald.diff %>% pivot_wider(names_from = PUMA, values_from = n, names_prefix = 'p')
+pums.missing.diff.reald %>% filter(is.na(n)) %>% nrow()
+pums.missing.diff.reald %>% pivot_wider(names_from = PUMA, values_from = n, names_prefix = 'p')
 # Okay - entirely missing 'Other' age 85+, age 55-60, age 0-18
 # Otherwise... only one NHPI 85+ to copy
 # 57 missing combos on the whole.
@@ -183,46 +245,45 @@ missing.age.reald.diff %>% pivot_wider(names_from = PUMA, values_from = n, names
 # Set seed for reproducibility
 set.seed(221505)
 
-reassigned.serials = missing.age.reald.diff %>%
+reassigned.diff.reld.serials = pums.missing.diff.reald %>%
   # Getting just the age-race combos we have records for
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
   # (also make sure to sample only from the records of people with a disability)
-  merge(pums.ancestry %>% filter(has.diff) %>% select(-has.diff), all.x = TRUE) %>%
+  merge(pums.disability %>% filter(has.diff) %>% select(-has.diff), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
   select(CBSERIAL, PERNUM, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
-  merge(missing.age.reald.diff %>% filter(is.na(n)) %>% select(-n)) %>%
+  merge(pums.missing.diff.reald %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
   slice_sample(n = 1) %>%
   ungroup()
 
 # How does it look?
-head(reassigned.serials)
+head(reassigned.diff.reld.serials)
 
 # Merge to see that we got all we need
 # (n.x and n.y should be the same)
 merge(
   reassigned.serials %>% count(reald, age),
-  missing.age.reald.diff %>% filter(is.na(n)) %>% count(age, reald),
+  pums.missing.diff.reald %>% filter(is.na(n)) %>% count(age, reald),
   by = c('reald', 'age'), all = TRUE
 )
 
 records.out = rbind(
-  reassigned.serials %>%
-    select(CBSERIAL, PERNUM, PUMA, reald, age) %>%
-    mutate(ancestry = NA),
-  missing.ancestry %>%
-    mutate(CBSERIAL = NA, PERNUM = NA, reald = NA, age = NA) %>%
-    select(CBSERIAL, PERNUM, PUMA, reald, age, ancestry)
-)
+  reassigned.diff.reld.serials %>%
+    select(CBSERIAL, PERNUM, PUMA),
+  reassigned.ancestry.serials %>%
+    select(CBSERIAL, PERNUM, PUMA)
+) %>%
+  distinct()
 
 records.out %>% print(n = nrow(.))
 
-write.csv(records.out, row.names = FALSE, 'multnomah/02_downscaling/phaseII/reld_ancestry_synthetic_records.csv')
+# write.csv(records.out, row.names = FALSE, 'multnomah/02_downscaling/phaseII/reld_disability_synthetic_records.csv')
 
 
 # ==============================================================
@@ -237,106 +298,20 @@ pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00053.xml') %>%
   filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
 
 # Get ancestry per pums
-pums.anc.pov = pums.raw %>%
+pums.pov = pums.raw %>%
   # Get ancestry data
-  select(CBSERIAL, PERNUM, PUMA, AGE, ANCESTR1, ANCESTR2, POVERTY) %>%
-  mutate(
-    # Ancestry (this one will be a doozy!)
-    across(
-      c(ANCESTR1, ANCESTR2), 
-      ~ case_match(
-        .,
-        # Western European (present in b04006)
-        # (including 122 German Russians in here...)
-        c(1, 3, 5, 8:9, 11, 20:22, 24, 26, 32, 46, 
-          49:51, 77:78, 82, 84, 88:89, 91, 97:99, 122, 183) ~ 'ReWestEur',
-        # White North Americans (not REALD but still present in b04006)
-        # Scots-Irish, PA Dutch, Canadian, French Canadian, Acadian/Cajun, American
-        c(87, 929, 931, 935, 936, 940) ~ 'Other.northam',
-        # Eastern European (present in b04006)
-        c(100, 115, 120, 125, 128:129, 144, 431) ~ 'ReEastEur',
-        # Slavic European (present in b04006)
-        c(103, 109, 111, 130, 142, 148, 152:154, 171, 176, 178) ~ 'ReSlavic',
-        # Other European (in b04006, not corresponding to reald)
-        # Eastern European NEC, European
-        c(190, 195) ~ 'Other.euro',
-        # Caribbean (present in b04006)
-        c(300:302, 308, 310, 314, 322, 335:337) ~ 'ReCaribbean',
-        # Hispanic South American
-        c(360, 370) ~ 'ReHispSou',
-        # Other "Arab" (in b04006 but NOT consistent for reald)
-        # Algerian, Libyan, North African, Saudi, Yemeni, Kurdish
-        c(400, 404, 411, 427, 435, 442, 496) ~ 'Other.arab',
-        # North African
-        c(402, 406, 429) ~ 'ReNoAfr',
-        # Middle eastern
-        # (including 600 Afghans here)
-        c(416:417, 419, 421, 425, 434, 465, 482, 495, 600) ~ 'ReMidEast',
-        # African (in reald and in b04006)
-        c(510, 529, 534, 541, 553, 564, 566, 570, 576, 587:588, 593) ~ 'ReAfrican',
-        # African other (in b04006 but NOT consistent for reald)
-        # e.g., because this is a catch-all it includes Eritrean (ReEthiopian)...
-        # Cameroonian, Congolese, Eritrean, Gambian, Guinean, Togo, West African,
-        # African, Other Subsaharan African
-        c(508, 515, 523, 527, 530, 586, 595, 598:599)  ~ 'Other.african',
-        # Ethiopian
-        522 ~ 'ReEthiopian',
-        # Somalian
-        568 ~ 'ReSomalian',
-        # ANZAs (in b04006 but NOT consistent for reald)
-        c(800, 803) ~ 'Other.anza',
-        # Other groups not present in b04006 (assigned to 'other groups')
-        # Flemish, British Isles, Prussian, Sicilian, Belorussian, Cossack,
-        # Bohemian, Rom, Moldov(i)an, Uzbek, Central Eur., Southern Eur., Western
-        # Eur., Spanish, all Hispanic, Grenadian, St. Lucian, "Middle Eastern",
-        # all non-Afghan Asians, all Pacific islanders, var. American ethnicities,
-        # Mixture, Other
-        c(9, 12, 40, 68, 102, 108, 112, 124, 146, 169, 181, 
-          185, 187, 200:295, 329, 331, 490, 
-          603:799, 808:870, 900:924, 983:995, 998) ~ 'Other',
-        .default = NA
-      )
-    ),
-    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
-  ) %>%
-  ### Get ancestry group counts
-  # this step is heinously slow, probably not programmed super well...
-  # Pivot out to get ancestry and counts in two columns
-  pivot_longer(cols = contains('ANC'), names_to = 'a12', values_to = 'ancestry') %>%
-  # add a count for how many times each ancestry group is recorded for each respondent
-  group_by(CBSERIAL, PERNUM, PUMA, ancestry) %>%
-  add_count(name = 'n.ancestry') %>%
-  # drop a12 because col it is unnecessary
-  select(-a12) %>%
-  # distinct will get rid of duplicates
-  distinct(.keep_all = TRUE) %>%
-  # Now, make some edits to the ancestry 
-  group_by(CBSERIAL, PERNUM, PUMA) %>%
-  mutate(
-    n.ancestry = case_when(
-      # Where there are NAs and non-NA ancestry counts, switch NA = 1 to NA = 0
-      is.na(ancestry) & any(!is.na(ancestry)) ~ 0,
-      # Where there are 2 NAs (i.e., no other ancestry counts) switch from NA = 2 to NA = 1
-      is.na(ancestry) & !any(!is.na(ancestry)) ~ 1,
-      .default = n.ancestry
-    )
-  ) %>%
-  ungroup() %>%
-  # Filtering out individuals with extraneous ancestry (NA = 0 where other
-  # ancestry is assigned, see above)
-  filter(n.ancestry > 0) %>%
-  # Add in 'unidentified' or whatever for the missing ancestries
-  mutate(ancestry = ifelse(is.na(ancestry), 'unclassified', ancestry)) %>%
+  select(CBSERIAL, PERNUM, PUMA, AGE, POVERTY) %>%
+  mutate(age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
   # # Now merge in reld
   merge(reald %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat))
 
-head(pums.anc.pov)
+head(pums.pov)
 
 # Most restrictive group here: want groups below the poverty line
 # by each age group
 
 ### Get PUMA-reald-age combos below poverty line
-pums.missing.pov = pums.anc.pov %>%
+pums.missing.reld.pov = pums.pov %>%
   # Filter all individuals with poverty available, below poverty line
   filter(POVERTY > 0, POVERTY < 100) %>%
   # Get all PUMA-race-age combos present
@@ -349,45 +324,45 @@ pums.missing.pov = pums.anc.pov %>%
   ungroup() %>%
   arrange(reald, age, PUMA)
 
-nrow(pums.missing.pov)
+nrow(pums.missing.reld.pov)
 
-pums.missing.pov %>% filter(is.na(n)) %>% nrow()
-pums.missing.pov %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
+pums.missing.reld.pov %>% filter(is.na(n)) %>% nrow()
+pums.missing.reld.pov %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
 # Looks like many entirely-missing groups, particularly among older demos.
 
 ### Get sample of dummy PUMS serial numbers, use workflow from above
 set.seed(5520970)
 
-reassigned.pov.serials = pums.missing.pov %>%
+reassigned.pov.reld.serials = pums.missing.reld.pov %>%
   # Getting just the age-race combos we have records for
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
   # (also make sure to sample only from the records of people with a disability)
-  merge(pums.anc.pov %>% filter(POVERTY < 100, POVERTY > 0), all.x = TRUE) %>%
+  merge(pums.pov %>% filter(POVERTY < 100, POVERTY > 0), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
   select(CBSERIAL, PERNUM, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
-  merge(pums.missing.pov %>% filter(is.na(n)) %>% select(-n)) %>%
+  merge(pums.missing.reld.pov %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
   slice_sample(n = 1) %>%
   ungroup()
 
-head(reassigned.pov.serials)
-nrow(reassigned.pov.serials)
+head(reassigned.pov.reld.serials)
+nrow(reassigned.pov.reld.serials)
 
 # Merge to see that we got all we need
 # (n.x and n.y should be the same)
 merge(
-  reassigned.pov.serials %>% count(reald, age),
-  pums.missing.pov %>% filter(is.na(n)) %>% count(age, reald),
+  reassigned.pov.reld.serials %>% count(reald, age),
+  pums.missing.reld.pov %>% filter(is.na(n)) %>% count(age, reald),
   by = c('reald', 'age'), all = TRUE
 )
 
 ### Get PUMA-age combos within the poverty universe
-pums.missing.univ = pums.anc.pov %>%
+pums.missing.reld.pov.univ = pums.pov %>%
   # Filter all individuals with poverty available, below poverty line
   filter(POVERTY > 0) %>%
   # Get all PUMA-race-age combos present
@@ -400,57 +375,48 @@ pums.missing.univ = pums.anc.pov %>%
   ungroup() %>%
   arrange(reald, age, PUMA)
 
-pums.missing.univ %>% filter(is.na(n)) %>% nrow()
-pums.missing.univ %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
+pums.missing.reld.pov.univ %>% filter(is.na(n)) %>% nrow()
+pums.missing.reld.pov.univ %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
 # totally missing 85+ individuals but otherwise looks like we're good
 
 ### Get sample of dummy PUMS serial numbers, use workflow from above
 set.seed(8030315)
 
-reassigned.univ.serials = pums.missing.univ %>%
+reassigned.reld.pov.univ.serials = pums.missing.reld.pov.univ %>%
   # Getting just the age-race combos we have records for
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
   # (also make sure to sample only from the records of people with a disability)
-  merge(pums.anc.pov %>% filter(POVERTY > 0), all.x = TRUE) %>%
+  merge(pums.pov %>% filter(POVERTY > 0), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
   select(CBSERIAL, PERNUM, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
-  merge(pums.missing.pov %>% filter(is.na(n)) %>% select(-n)) %>%
+  merge(pums.missing.reld.pov.univ %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
   slice_sample(n = 1) %>%
   ungroup()
 
-# Get missing ancestries (probably same as above)
-missing.ancestry = pums.anc.pov %>%
-  count(PUMA, ancestry) %>%
-  complete(PUMA, ancestry) %>% 
-  filter(is.na(n))
+### Combine
 
 records.out = rbind(
-  reassigned.pov.serials %>%
-    select(CBSERIAL, PERNUM, PUMA, reald, age) %>%
-    mutate(ancestry = NA),
-  reassigned.univ.serials %>%
-    select(CBSERIAL, PERNUM, PUMA, reald, age) %>%
-    mutate(ancestry = NA)
+  reassigned.pov.reld.serials %>%
+    select(CBSERIAL, PERNUM, PUMA),
+  reassigned.reld.pov.univ.serials %>%
+    select(CBSERIAL, PERNUM, PUMA),
+  reassigned.ancestry.serials %>%
+    select(CBSERIAL, PERNUM, PUMA)    
 ) %>%
-  distinct() %>%
-  rbind(
-    missing.ancestry %>%
-      mutate(CBSERIAL = NA, PERNUM = NA, reald = NA, age = NA) %>%
-      select(CBSERIAL, PERNUM, PUMA, reald, age, ancestry)
-  )
+  distinct()
 
 records.out %>% print(n = nrow(.))
 
-write.csv(
-  records.out, row.names = FALSE, 
-  'multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv'
-)
+# write.csv(
+#   records.out, row.names = FALSE,
+#   'multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv'
+# )
 
 
 # ==============================================================
@@ -465,10 +431,10 @@ pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00056.xml') %>%
   filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
 
 # Get ancestry per pums
-pums.anc.vet.hou = pums.raw %>%
+pums.vet.hou = pums.raw %>%
   # Get ancestry data
   select(
-    CBSERIAL, PERNUM, PUMA, AGE, ANCESTR1, ANCESTR2, 
+    CBSERIAL, PERNUM, PUMA, PERWT, AGE, 
     VETSTAT, starts_with('DIFF'), GQ, OCC, MARST, RELATE
   ) %>%
   mutate(
@@ -498,6 +464,7 @@ pums.anc.vet.hou = pums.raw %>%
     in.vet.univ = as.numeric(!(OCC %in% 9800:9850) & (AGE > 17)),
     # Flag for disability universe (civilian noninstitutionalized)
     in.dis.univ = as.numeric(!(OCC %in% 9800:9850) & !(GQ %in% 3)),
+    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
   ) %>%
   # Add household stats
   group_by(CBSERIAL) %>%
@@ -512,100 +479,13 @@ pums.anc.vet.hou = pums.raw %>%
     )
   ) %>%
   ungroup() %>%
-  mutate(
-    # Ancestry (this one will be a doozy!)
-    across(
-      c(ANCESTR1, ANCESTR2), 
-      ~ case_match(
-        .,
-        # Western European (present in b04006)
-        # (including 122 German Russians in here...)
-        c(1, 3, 5, 8:9, 11, 20:22, 24, 26, 32, 46, 
-          49:51, 77:78, 82, 84, 88:89, 91, 97:99, 122, 183) ~ 'ReWestEur',
-        # White North Americans (not REALD but still present in b04006)
-        # Scots-Irish, PA Dutch, Canadian, French Canadian, Acadian/Cajun, American
-        c(87, 929, 931, 935, 936, 940) ~ 'Other.northam',
-        # Eastern European (present in b04006)
-        c(100, 115, 120, 125, 128:129, 144, 431) ~ 'ReEastEur',
-        # Slavic European (present in b04006)
-        c(103, 109, 111, 130, 142, 148, 152:154, 171, 176, 178) ~ 'ReSlavic',
-        # Other European (in b04006, not corresponding to reald)
-        # Eastern European NEC, European
-        c(190, 195) ~ 'Other.euro',
-        # Caribbean (present in b04006)
-        c(300:302, 308, 310, 314, 322, 335:337) ~ 'ReCaribbean',
-        # Hispanic South American
-        c(360, 370) ~ 'ReHispSou',
-        # Other "Arab" (in b04006 but NOT consistent for reald)
-        # Algerian, Libyan, North African, Saudi, Yemeni, Kurdish
-        c(400, 404, 411, 427, 435, 442, 496) ~ 'Other.arab',
-        # North African
-        c(402, 406, 429) ~ 'ReNoAfr',
-        # Middle eastern
-        # (including 600 Afghans here)
-        c(416:417, 419, 421, 425, 434, 465, 482, 495, 600) ~ 'ReMidEast',
-        # African (in reald and in b04006)
-        c(510, 529, 534, 541, 553, 564, 566, 570, 576, 587:588, 593) ~ 'ReAfrican',
-        # African other (in b04006 but NOT consistent for reald)
-        # e.g., because this is a catch-all it includes Eritrean (ReEthiopian)...
-        # Cameroonian, Congolese, Eritrean, Gambian, Guinean, Togo, West African,
-        # African, Other Subsaharan African
-        c(508, 515, 523, 527, 530, 586, 595, 598:599)  ~ 'Other.african',
-        # Ethiopian
-        522 ~ 'ReEthiopian',
-        # Somalian
-        568 ~ 'ReSomalian',
-        # ANZAs (in b04006 but NOT consistent for reald)
-        c(800, 803) ~ 'Other.anza',
-        # Other groups not present in b04006 (assigned to 'other groups')
-        # Flemish, British Isles, Prussian, Sicilian, Belorussian, Cossack,
-        # Bohemian, Rom, Moldov(i)an, Uzbek, Central Eur., Southern Eur., Western
-        # Eur., Spanish, all Hispanic, Grenadian, St. Lucian, "Middle Eastern",
-        # all non-Afghan Asians, all Pacific islanders, var. American ethnicities,
-        # Mixture, Other
-        c(9, 12, 40, 68, 102, 108, 112, 124, 146, 169, 181, 
-          185, 187, 200:295, 329, 331, 490, 
-          603:799, 808:870, 900:924, 983:995, 998) ~ 'Other',
-        .default = NA
-      )
-    ),
-    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
-  ) %>%
-  ### Get ancestry group counts
-  # this step is heinously slow, probably not programmed super well...
-  # Pivot out to get ancestry and counts in two columns
-  pivot_longer(cols = contains('ANC'), names_to = 'a12', values_to = 'ancestry') %>%
-  # add a count for how many times each ancestry group is recorded for each respondent
-  group_by(CBSERIAL, PERNUM, PUMA, ancestry) %>%
-  add_count(name = 'n.ancestry') %>%
-  # drop a12 because col it is unnecessary
-  select(-a12) %>%
-  # distinct will get rid of duplicates
-  distinct(.keep_all = TRUE) %>%
-  # Now, make some edits to the ancestry 
-  group_by(CBSERIAL, PERNUM, PUMA) %>%
-  mutate(
-    n.ancestry = case_when(
-      # Where there are NAs and non-NA ancestry counts, switch NA = 1 to NA = 0
-      is.na(ancestry) & any(!is.na(ancestry)) ~ 0,
-      # Where there are 2 NAs (i.e., no other ancestry counts) switch from NA = 2 to NA = 1
-      is.na(ancestry) & !any(!is.na(ancestry)) ~ 1,
-      .default = n.ancestry
-    )
-  ) %>%
-  ungroup() %>%
-  # Filtering out individuals with extraneous ancestry (NA = 0 where other
-  # ancestry is assigned, see above)
-  filter(n.ancestry > 0) %>%
-  # Add in 'unidentified' or whatever for the missing ancestries
-  mutate(ancestry = ifelse(is.na(ancestry), 'unclassified', ancestry)) %>%
   # # Now merge in reld
   merge(reald %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat))
 
 
 ####### Get PUMA-reald-age combos
 
-pums.missing.reld = pums.anc.vet.hou %>%
+pums.missing.reld = pums.vet.hou %>%
   # Get all PUMA-race-age combos present
   count(PUMA, reald, age) %>%
   # Get all possible combinations (missing will be n == NA)
@@ -630,23 +510,24 @@ reassigned.reld.serials = pums.missing.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou, all.x = TRUE) %>%
+  merge(pums.vet.hou, all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PUMA) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.reld.serials
 
 
 ####### Get PUMA-reald-age combos in family household
 
-pums.missing.fam.reld = pums.anc.vet.hou %>%
+pums.missing.fam.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(family.hous %in% 'fam.hou') %>%
   # Get all PUMA-race-age combos present
@@ -673,23 +554,24 @@ reassigned.fam.reld.serials = pums.missing.fam.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(family.hous %in% 'fam.hou'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(family.hous %in% 'fam.hou'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.fam.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.fam.reld.serials
 
 
 ####### Get PUMA-reald-age combos living alone
 
-pums.missing.alo.reld = pums.anc.vet.hou %>%
+pums.missing.alo.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(lives.alone %in% 'liv.alone') %>%
   # Get all PUMA-race-age combos present
@@ -717,23 +599,24 @@ reassigned.alo.reld.serials = pums.missing.alo.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(lives.alone %in% 'liv.alone'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(lives.alone %in% 'liv.alone'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.alo.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.alo.reld.serials
 
 
 ####### Get PUMA-reald-age combos in GQ
 
-pums.missing.gq.reld = pums.anc.vet.hou %>%
+pums.missing.gq.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(GQ %in% (3:4)) %>%
   # Get all PUMA-race-age combos present
@@ -761,23 +644,24 @@ reassigned.gq.reld.serials = pums.missing.gq.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(GQ %in% (3:4)), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(GQ %in% (3:4)), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.gq.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.gq.reld.serials
 
 
 ####### Get PUMA-reald-age combos in family household
 
-pums.missing.grp.reld = pums.anc.vet.hou %>%
+pums.missing.grp.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(grandparent %in% 'witha.grandparent') %>%
   # Get all PUMA-race-age combos present
@@ -805,25 +689,26 @@ reassigned.grp.reld.serials = pums.missing.grp.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(grandparent %in% 'witha.grandparent'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(grandparent %in% 'witha.grandparent'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.grp.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.grp.reld.serials
 
 
 ####### Get PUMA-reald-age combos in non-family households
 
-pums.missing.nonfam.reld = pums.anc.vet.hou %>%
+pums.missing.nonfam.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
-  filter(family.hous %in% 'nonfam.hou') %>%
+  filter(family.hous %in% 'nonfam.hou' & !(GQ %in% 3:4)) %>%
   # Get all PUMA-race-age combos present
   count(PUMA, reald, age) %>%
   # Get all possible combinations (missing will be n == NA)
@@ -848,23 +733,24 @@ reassigned.nonfam.reld.serials = pums.missing.nonfam.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(family.hous %in% 'nonfam.hou'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(family.hous %in% 'nonfam.hou' & !(GQ %in% 3:4)), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.nonfam.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.nonfam.reld.serials
 
 
 ####### Get PUMA-reald-age combos who are married
 
-pums.missing.nowmar.reld = pums.anc.vet.hou %>%
+pums.missing.nowmar.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(mar %in% 'now.married') %>%
   # Get all PUMA-race-age combos present
@@ -891,23 +777,24 @@ reassigned.nowmar.reld.serials = pums.missing.nowmar.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(mar %in% 'now.married'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(mar %in% 'now.married'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.nowmar.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.nowmar.reld.serials
 
 
 ####### Get PUMA-reald-age combos for never-married 
 
-pums.missing.nevmar.reld = pums.anc.vet.hou %>%
+pums.missing.nevmar.reld = pums.vet.hou %>%
   # Filter all individuals never married
   filter(mar %in% 'nev.mar', AGE > 14) %>%
   # Get all PUMA-race-age combos present
@@ -934,23 +821,24 @@ reassigned.nevmar.reld.serials = pums.missing.nevmar.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(mar %in% 'nev.mar', AGE > 14), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(mar %in% 'nev.mar', AGE > 14), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.nevmar.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.nevmar.reld.serials
 
 
 ####### Get PUMA-reald-age combos for divorced/widowed 
 
-pums.missing.divwid.reld = pums.anc.vet.hou %>%
+pums.missing.divwid.reld = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(mar %in% c('divorced', 'widowed'), AGE > 14) %>%
   # Get all PUMA-race-age combos present
@@ -977,23 +865,24 @@ reassigned.divwid.reld.serials = pums.missing.divwid.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(mar %in% c('divorced', 'widowed'), AGE > 14), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(mar %in% c('divorced', 'widowed'), AGE > 14), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.divwid.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.divwid.reld.serials
 
 
 ####### Get PUMA-reald-age combos for never-married 
 
-pums.missing.vet.reld = pums.anc.vet.hou %>%
+pums.missing.vet.reld = pums.vet.hou %>%
   # Filter all individuals never married
   filter(VETSTAT %in% 2) %>%
   # Get all PUMA-race-age combos present
@@ -1021,22 +910,23 @@ reassigned.vet.reld.serials = pums.missing.vet.reld %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(VETSTAT %in% 2), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(VETSTAT %in% 2), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.vet.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.vet.reld.serials
 
 ####### Get PUMA-age combos for veterans in group quarters
 
-pums.missing.gq.vet = pums.anc.vet.hou %>%
+pums.missing.gq.vet = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(VETSTAT %in% 2, GQ %in% (3:4)) %>%
   # Get all PUMA-race-age combos present
@@ -1063,23 +953,24 @@ reassigned.gq.vet.serials = pums.missing.gq.vet %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(VETSTAT %in% 2, GQ %in% (3:4)), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(VETSTAT %in% 2, GQ %in% (3:4)), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.gq.vet %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1/PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.gq.vet.serials
 
 
 ####### Get PUMA-age combos for veterans in a multigenerational household
 
-pums.missing.grp.vet = pums.anc.vet.hou %>%
+pums.missing.grp.vet = pums.vet.hou %>%
   # Filter all individuals with poverty available, below poverty line
   filter(VETSTAT %in% 2, grandparent %in% 'witha.grandparent') %>%
   # Get all PUMA-race-age combos present
@@ -1106,57 +997,21 @@ reassigned.grp.vet.serials = pums.missing.grp.vet %>%
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.anc.vet.hou %>% filter(VETSTAT %in% 2, grandparent %in% 'witha.grandparent'), all.x = TRUE) %>%
+  merge(pums.vet.hou %>% filter(VETSTAT %in% 2, grandparent %in% 'witha.grandparent'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.grp.vet %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.grp.vet.serials
 
-####### Missing ancestry (for constraints)
-
-# Get missing ancestries (probably same as above)
-missing.ancestry = pums.anc.vet.hou %>%
-  count(PUMA, ancestry) %>%
-  complete(PUMA, ancestry) %>% 
-  filter(is.na(n))
-
-missing.ancestry
-# same as it ever was
-
-
-######## Collect into one data frame
-
-records.out = rbind(
-  reassigned.alo.reld.serials,
-  reassigned.divwid.reld.serials,
-  reassigned.fam.reld.serials,
-  reassigned.gq.reld.serials,
-  reassigned.gq.vet.serials,
-  reassigned.grp.reld.serials,
-  reassigned.grp.vet.serials,
-  reassigned.nevmar.reld.serials,
-  reassigned.nonfam.reld.serials,
-  reassigned.nowmar.reld.serials,
-  reassigned.reld.serials,
-  reassigned.vet.reld.serials
-) %>%
-  distinct() %>%
-  select(CBSERIAL, PERNUM, PUMA, reald, age) %>%
-  mutate(ancestry = NA) %>%
-  rbind(
-    missing.ancestry %>%
-      mutate(CBSERIAL = NA, PERNUM = NA, reald = NA, age = NA) %>%
-      select(CBSERIAL, PERNUM, PUMA, reald, age, ancestry)
-  )
-
-write.csv(records.out, row.names = FALSE, 'multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
+# (will export below)
 
 
 # ==============================================================
@@ -1211,146 +1066,20 @@ pums.cost = pums.raw %>%
       as.character(ren.pct)
     ),
     # flag for group quarters
-    in.gq = GQ %in% (3:5)
-  ) %>%
-  # Handle ancestry and reald (ancestry likely not needed but do it to be thorough)
-  mutate(
-    # Ancestry (this one will be a doozy!)
-    across(
-      c(ANCESTR1, ANCESTR2), 
-      ~ case_match(
-        .,
-        # Western European (present in b04006)
-        # (including 122 German Russians in here...)
-        c(1, 3, 5, 8:9, 11, 20:22, 24, 26, 32, 46, 
-          49:51, 77:78, 82, 84, 88:89, 91, 97:99, 122, 183) ~ 'ReWestEur',
-        # White North Americans (not REALD but still present in b04006)
-        # Scots-Irish, PA Dutch, Canadian, French Canadian, Acadian/Cajun, American
-        c(87, 929, 931, 935, 936, 940) ~ 'Other.northam',
-        # Eastern European (present in b04006)
-        c(100, 115, 120, 125, 128:129, 144, 431) ~ 'ReEastEur',
-        # Slavic European (present in b04006)
-        c(103, 109, 111, 130, 142, 148, 152:154, 171, 176, 178) ~ 'ReSlavic',
-        # Other European (in b04006, not corresponding to reald)
-        # Eastern European NEC, European
-        c(190, 195) ~ 'Other.euro',
-        # Caribbean (present in b04006)
-        c(300:302, 308, 310, 314, 322, 335:337) ~ 'ReCaribbean',
-        # Hispanic South American
-        c(360, 370) ~ 'ReHispSou',
-        # Other "Arab" (in b04006 but NOT consistent for reald)
-        # Algerian, Libyan, North African, Saudi, Yemeni, Kurdish
-        c(400, 404, 411, 427, 435, 442, 496) ~ 'Other.arab',
-        # North African
-        c(402, 406, 429) ~ 'ReNoAfr',
-        # Middle eastern
-        # (including 600 Afghans here)
-        c(416:417, 419, 421, 425, 434, 465, 482, 495, 600) ~ 'ReMidEast',
-        # African (in reald and in b04006)
-        c(510, 529, 534, 541, 553, 564, 566, 570, 576, 587:588, 593) ~ 'ReAfrican',
-        # African other (in b04006 but NOT consistent for reald)
-        # e.g., because this is a catch-all it includes Eritrean (ReEthiopian)...
-        # Cameroonian, Congolese, Eritrean, Gambian, Guinean, Togo, West African,
-        # African, Other Subsaharan African
-        c(508, 515, 523, 527, 530, 586, 595, 598:599)  ~ 'Other.african',
-        # Ethiopian
-        522 ~ 'ReEthiopian',
-        # Somalian
-        568 ~ 'ReSomalian',
-        # ANZAs (in b04006 but NOT consistent for reald)
-        c(800, 803) ~ 'Other.anza',
-        # Other groups not present in b04006 (assigned to 'other groups')
-        # Flemish, British Isles, Prussian, Sicilian, Belorussian, Cossack,
-        # Bohemian, Rom, Moldov(i)an, Uzbek, Central Eur., Southern Eur., Western
-        # Eur., Spanish, all Hispanic, Grenadian, St. Lucian, "Middle Eastern",
-        # all non-Afghan Asians, all Pacific islanders, var. American ethnicities,
-        # Mixture, Other
-        c(9, 12, 40, 68, 102, 108, 112, 124, 146, 169, 181, 
-          185, 187, 200:295, 329, 331, 490, 
-          603:799, 808:870, 900:924, 983:995, 998) ~ 'Other',
-        .default = NA
-      )
-    ),
+    in.inst = GQ %in% 3,
+    # Binned ages for output
     age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
   ) %>%
-  ### Get ancestry group counts
-  # this step is heinously slow, probably not programmed super well...
-  # Pivot out to get ancestry and counts in two columns
-  pivot_longer(cols = contains('ANC'), names_to = 'a12', values_to = 'ancestry') %>%
-  # add a count for how many times each ancestry group is recorded for each respondent
-  group_by(CBSERIAL, PERNUM, PUMA, ancestry) %>%
-  add_count(name = 'n.ancestry') %>%
-  # drop a12 because col it is unnecessary
-  select(-a12) %>%
-  # distinct will get rid of duplicates
-  distinct(.keep_all = TRUE) %>%
-  # Now, make some edits to the ancestry 
-  group_by(CBSERIAL, PERNUM, PUMA) %>%
-  mutate(
-    n.ancestry = case_when(
-      # Where there are NAs and non-NA ancestry counts, switch NA = 1 to NA = 0
-      is.na(ancestry) & any(!is.na(ancestry)) ~ 0,
-      # Where there are 2 NAs (i.e., no other ancestry counts) switch from NA = 2 to NA = 1
-      is.na(ancestry) & !any(!is.na(ancestry)) ~ 1,
-      .default = n.ancestry
-    )
-  ) %>%
-  ungroup() %>%
-  # Filtering out individuals with extraneous ancestry (NA = 0 where other
-  # ancestry is assigned, see above)
-  filter(n.ancestry > 0) %>%
-  # Add in 'unidentified' or whatever for the missing ancestries
-  mutate(ancestry = ifelse(is.na(ancestry), 'unclassified', ancestry)) %>%
   # # Now merge in reld
   merge(reald %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat))
 
 
-####### Get missing PUMA-reald-age combos
-
-pums.missing.reld = pums.cost %>%
-  # Get all PUMA-race-age combos present
-  count(PUMA, reald, age) %>%
-  # Get all possible combinations (missing will be n == NA)
-  complete(PUMA, reald, age) %>%
-  # give me any race-age combo missing from at least one PUMA
-  group_by(reald, age) %>%
-  filter(any(is.na(n))) %>%
-  ungroup() %>%
-  arrange(reald, age, PUMA)
-
-
-nrow(pums.missing.reld)
-
-pums.missing.reld %>% filter(is.na(n)) %>% nrow()
-pums.missing.reld %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
-
-### Get sample of dummy PUMS serial numbers, use workflow from above
-set.seed(2214892) # NOTE: same seed as above
-
-reassigned.reld.serials = pums.missing.reld %>%
-  # Getting just the age-race combos we have records for
-  filter(!is.na(n)) %>%
-  select(-n) %>%
-  # Merge to get records (serial numbers most importantly)
-  merge(pums.cost, all.x = TRUE) %>%
-  # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
-  # Now, merge back in with the list of PUMA-age-race columns we need
-  # (this is the step where records get duplicated)
-  merge(pums.missing.reld %>% filter(is.na(n)) %>% select(-n)) %>%
-  # Now sample one record per PUMA-age-race column
-  group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
-
-reassigned.reld.serials
-
 
 ####### Get missing PUMA-reald-age combos in GQ (recycling code from above)
 
-pums.missing.gq.reld = pums.cost %>%
+pums.missing.inst.reld = pums.cost %>%
   # Filter all individuals in gq
-  filter(GQ %in% (3:4)) %>%
+  filter(GQ %in% 3) %>%
   # Get all PUMA-race-age combos present
   count(PUMA, reald, age) %>%
   # Get all possible combinations (missing will be n == NA)
@@ -1362,32 +1091,33 @@ pums.missing.gq.reld = pums.cost %>%
   arrange(reald, age, PUMA)
 
 
-nrow(pums.missing.gq.reld)
+nrow(pums.missing.inst.reld)
 
-pums.missing.gq.reld %>% filter(is.na(n)) %>% nrow()
-pums.missing.gq.reld %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
+pums.missing.inst.reld %>% filter(is.na(n)) %>% nrow()
+pums.missing.inst.reld %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
 # many combinations completely missing
 
 ### Get sample of dummy PUMS serial numbers, use workflow from above
-set.seed(122111) # also using same seed as above
+set.seed(526610)
 
-reassigned.gq.reld.serials = pums.missing.gq.reld %>%
+reassigned.inst.reld.serials = pums.missing.inst.reld %>%
   # Getting just the age-race combos we have records for
   filter(!is.na(n)) %>%
   select(-n) %>%
   # Merge to get records (serial numbers most importantly)
-  merge(pums.cost %>% filter(GQ %in% (3:4)), all.x = TRUE) %>%
+  merge(pums.cost %>% filter(GQ %in% 3), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
-  merge(pums.missing.gq.reld %>% filter(is.na(n)) %>% select(-n)) %>%
+  merge(pums.missing.inst.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
-reassigned.gq.reld.serials
+reassigned.inst.reld.serials
 
 
 ####### Get missing PUMA-reald-age combos for renters at >30% of income
@@ -1422,14 +1152,15 @@ reassigned.r30.reld.serials = pums.missing.r30.reld %>%
   # Merge to get records (serial numbers most importantly)
   merge(pums.cost %>% filter(ren.pct %in% 'over30'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.r30.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.r30.reld.serials
 
@@ -1465,20 +1196,274 @@ reassigned.o30.reld.serials = pums.missing.o30.reld %>%
   # Merge to get records (serial numbers most importantly)
   merge(pums.cost %>% filter(own.pct %in% 'over30'), all.x = TRUE) %>%
   # Remove unnecessary columns (importantly, the PUMA column)
-  select(CBSERIAL, PERNUM, reald, age) %>%
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
   # Now, merge back in with the list of PUMA-age-race columns we need
   # (this is the step where records get duplicated)
   merge(pums.missing.o30.reld %>% filter(is.na(n)) %>% select(-n)) %>%
   # Now sample one record per PUMA-age-race column
   group_by(reald, age, PUMA) %>%
-  slice_sample(n = 1) %>%
-  ungroup()
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
 
 reassigned.o30.reld.serials
 
 
-#######
-# BEFORE EXPORTING:
-# look to pick up any extra cases from the owners and renters below 30
-# don't copy unnecessarily - see what the over 30 didn't catch
+### Just in case, it's probably a good idea to also do this for tenure
+# (I know that *some* of these will be handled by the over-30, but we know from
+# the Somali GQ example that having only one sample of rare combinations of
+# cases can skew estimates)
 
+####### Get missing PUMA-reald-age combos for renters
+
+pums.missing.ren.reld = pums.cost %>%
+  # Filter all individuals in gq
+  filter(tenure %in% 'renter') %>%
+  # Get all PUMA-race-age combos present
+  count(PUMA, reald, age) %>%
+  # Get all possible combinations (missing will be n == NA)
+  complete(PUMA, reald, age) %>%
+  # give me any race-age combo missing from at least one PUMA
+  group_by(reald, age) %>%
+  filter(any(is.na(n))) %>%
+  ungroup() %>%
+  arrange(reald, age, PUMA)
+
+nrow(pums.missing.ren.reld)
+
+pums.missing.ren.reld %>% filter(is.na(n)) %>% nrow()
+pums.missing.ren.reld %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
+# everybody here except for 85+
+
+### Get sample of dummy PUMS serial numbers, use workflow from above
+set.seed(6844512) # also using same seed as above
+
+reassigned.ren.reld.serials = pums.missing.ren.reld %>%
+  # Getting just the age-race combos we have records for
+  filter(!is.na(n)) %>%
+  select(-n) %>%
+  # Merge to get records (serial numbers most importantly)
+  merge(pums.cost %>% filter(tenure %in% 'renter'), all.x = TRUE) %>%
+  # Remove unnecessary columns (importantly, the PUMA column)
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
+  # Now, merge back in with the list of PUMA-age-race columns we need
+  # (this is the step where records get duplicated)
+  merge(pums.missing.ren.reld %>% filter(is.na(n)) %>% select(-n)) %>%
+  # Now sample one record per PUMA-age-race column
+  group_by(reald, age, PUMA) %>%
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
+
+reassigned.ren.reld.serials
+
+
+####### Get missing PUMA-reald-age combos for owners at >30% of income
+
+pums.missing.own.reld = pums.cost %>%
+  # Filter all individuals in gq
+  filter(tenure %in% 'owner') %>%
+  # Get all PUMA-race-age combos present
+  count(PUMA, reald, age) %>%
+  # Get all possible combinations (missing will be n == NA)
+  complete(PUMA, reald, age) %>%
+  # give me any race-age combo missing from at least one PUMA
+  group_by(reald, age) %>%
+  filter(any(is.na(n))) %>%
+  ungroup() %>%
+  arrange(reald, age, PUMA)
+
+
+nrow(pums.missing.own.reld)
+
+pums.missing.own.reld %>% filter(is.na(n)) %>% nrow()
+pums.missing.own.reld %>% pivot_wider(names_from = PUMA, names_prefix = 'p', values_from = n)
+# everybody here except for 85+
+
+### Get sample of dummy PUMS serial numbers, use workflow from above
+set.seed(22040751) # also using same seed as above
+
+reassigned.own.reld.serials = pums.missing.own.reld %>%
+  # Getting just the age-race combos we have records for
+  filter(!is.na(n)) %>%
+  select(-n) %>%
+  # Merge to get records (serial numbers most importantly)
+  merge(pums.cost %>% filter(tenure %in% 'owner'), all.x = TRUE) %>%
+  # Remove unnecessary columns (importantly, the PUMA column)
+  select(CBSERIAL, PERNUM, PERWT, reald, age) %>%
+  # Now, merge back in with the list of PUMA-age-race columns we need
+  # (this is the step where records get duplicated)
+  merge(pums.missing.own.reld %>% filter(is.na(n)) %>% select(-n)) %>%
+  # Now sample one record per PUMA-age-race column
+  group_by(reald, age, PUMA) %>%
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
+
+reassigned.own.reld.serials
+
+
+######## Collect into one data frame # THIS IS FOR REAL
+
+records.out = rbind(
+  reassigned.alo.reld.serials,
+  reassigned.divwid.reld.serials,
+  reassigned.fam.reld.serials,
+  reassigned.gq.reld.serials,
+  reassigned.gq.vet.serials,
+  reassigned.grp.reld.serials,
+  reassigned.grp.vet.serials,
+  reassigned.nevmar.reld.serials,
+  reassigned.nonfam.reld.serials,
+  reassigned.nowmar.reld.serials,
+  reassigned.reld.serials,
+  reassigned.vet.reld.serials,
+  reassigned.inst.reld.serials,
+  reassigned.ren.reld.serials,
+  reassigned.own.reld.serials,
+  reassigned.r30.reld.serials,
+  reassigned.o30.reld.serials
+) %>%
+  select(CBSERIAL, PERNUM, PUMA) %>%
+  rbind(reassigned.ancestry.serials %>% select(CBSERIAL, PERNUM, PUMA)) %>%
+  distinct()
+
+nrow(records.out)
+
+# write.csv(
+#   records.out, row.names = FALSE,
+#   'multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv'
+# )
+
+
+# ==============================================================
+# ==============================================================
+
+# See if there are any extra combos we can make using 2022 data...
+
+# ==============================================================
+# Read in reld assignments from 2022 ACS
+
+reald22 = read.csv('multnomah/01_raw_data/5acs22_orwa_reldpri.csv') %>%
+  filter(grepl('^2018', serialno)) %>%
+  # fix serial numbers
+  mutate(
+    serialno = gsub('GQ', '01', serialno),
+    serialno = gsub('HU', '00', serialno)
+  ) %>%
+  # give me reald category
+  mutate(
+    realdcat = case_match(
+      reldpri,
+      c('HisMex', 'HisCen', 'HisOth', 'HisSou') ~ 'HispLat',
+      c('NHPIoth', 'Cham', 'Samoan', 'COFA', 'Marshall', 'NatHaw') ~ 'NHPI',
+      c('WestEur', 'WhiteOth', 'Slavic', 'EastEur') ~ 'White',
+      c('AmInd', 'AlaskNat', 'LatInd') ~ 'AmInd',
+      c('AfrAm', 'African', 'Caribbean', 'Ethiopian', 'Somali') ~ 'Black',
+      c('MidEast', 'NoAfr') ~ 'MENA',
+      c('Chinese', 'Filipino', 'Cambodian', 'Vietnamese', 'Korean', 
+        'Japanese', 'Myanmar', 'AsianInd', 'SoAsian', 'Hmong', 
+        'Laotian', 'AsianOth') ~ 'Asian',
+      'RaceOth' ~ 'Other'
+    )
+  )
+
+
+# ==============================================================
+# Read in 2018-2022 ACS PUMS
+
+pums22 = read_ipums_ddi('multnomah/01_raw_data/usa_00058.xml') %>%
+  # Read in data
+  read_ipums_micro() %>%
+  filter(MULTYEAR < 2019) %>%
+  # Fix PUMA
+  mutate(PUMA = ifelse(PUMA > 5100, PUMA, PUMA + (5100-1300))) %>%
+  merge(reald22 %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat)) %>%
+  mutate(age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
+  # Get rid of some unnecessary columns
+  select(-c(ANCESTR1D, ANCESTR2D, VETSTATD, COUNTYICP, STRATA, SERIAL)) %>%
+  # Get living alone and/or multigeneration flags (need to do this on whole
+  # dataset) %>%
+  group_by(CBSERIAL) %>%
+  mutate(
+    lives.alone = ifelse(n() < 2, 'liv.alone', 'not.liv.alone'),
+    family.hous = ifelse(any(RELATE[PERNUM > 1] <= 10), 'fam.hou', 'nonfam.hou'),
+    grandparent = ifelse(
+      ((any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
+      'witha.grandparent',
+      'without.grandparent'
+    )
+  ) %>%
+  ungroup()
+
+rm(missing.ancestry)
+
+# ==============================================================
+# Get non-reld misses and reconcile with PUMS
+
+misses.non.reld = ls() %>% 
+  grep('missing', ., value = TRUE) %>% 
+  grep('rea?ld', ., value = TRUE, invert = TRUE) %>%
+  as.list() %>% 
+  lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
+
+misses.non.reld = misses.non.reld %>% 
+  do.call(what = rbind) %>%
+  mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
+  group_by(age, table.is) %>%
+  filter(all(is.na(n)))
+
+# ah these are both because there are no under-18 vets...
+
+
+# ==============================================================
+# Get eld misses and reconcile with PUMS
+
+misses.reld = ls() %>% 
+  grep('missing', ., value = TRUE) %>% 
+  grep('rea?ld', ., value = TRUE) %>%
+  as.list() %>% 
+  lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
+
+misses.reld = misses.reld %>% 
+  do.call(what = rbind) %>%
+  mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
+  group_by(age, reald, table.is) %>%
+  filter(all(is.na(n))) %>%
+  distinct(age, reald, table.is) %>%
+  arrange(reald, age) %>%
+  ungroup()
+
+# Looks like a lot!
+
+# Merge this with the pums22 to see if we can fish anything out...
+
+in.old.pums = merge(pums22, misses.reld, by = c('age', 'reald'))
+# Hmm... okay let's see what happens
+
+# Okay I think we'll need to make a lot of new columns...
+
+in.old.pums %>%
+  mutate(
+    is.vet = VETSTAT > 1 & grepl('vet', table.is),
+    nowmar = MARST %in% 1:3 & grepl('nowmar', table.is),
+    divwid = MARST %in% 4 &   grepl('divwid', table.is),
+    in.ins = GQ %in% 3 &      grepl('inst', table.is),
+    nonfam = family.hous %in% 'nonfam.hou' & grepl('nonfam', table.is),
+    in.grq = GQ %in% 3:4 & grepl('gq', table.is),
+    is.alo = lives.alone %in% 'liv.alone' & grepl('alo', table.is),
+    is.dis = ((DIFFREM > 1) | (DIFFPHYS > 1) | (DIFFMOB > 1) | (DIFFCARE > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1)) &
+      !(OCC %in% 9800:9850) & !(GQ %in% 3) & grepl('diff', table.is)
+  ) %>%
+  filter(if_any(where(is.logical)))
+
+# grand total of four records...
+
+in.old.pums %>% filter(grepl('vet', table.is)) %>% count(VETSTAT)
+in.old.pums %>% filter(grepl('nowmar', table.is)) %>% count(MARST)
+in.old.pums %>% filter(grepl('divwid', table.is)) %>% count(MARST)
+in.old.pums %>% filter(grepl('nonfam', table.is)) %>% count(family.hous)
+in.old.pums %>% filter(grepl('alo', table.is)) %>% count(lives.alone)
+in.old.pums %>% filter(grepl('diff', table.is))
+
+# Hmm... lol
