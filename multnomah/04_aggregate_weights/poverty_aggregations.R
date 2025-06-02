@@ -10,9 +10,7 @@ rm(list = ls())
 # Read in data and estimates
 
 # Read in PUMS and subset to MultCo
-pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00053.xml') %>%
-  # Read in data
-  read_ipums_micro() %>%
+pums.raw = read_ipums_micro('multnomah/01_raw_data/usa_00053.xml') %>%
   # Subset geography
   filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
 
@@ -51,58 +49,49 @@ multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # Get synthetic records (PUMS and dummy)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv') %>%
-  # Remove the ancestry-only records
-  filter(!is.na(CBSERIAL)) %>%
-  # Merge in with PUMS to get other data
-  merge(pums.raw %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
-  select(names(pums.raw)) %>%
-  # Remove duplicates
-  # (these cause issues when getting the disability-all varb and the duplicates
-  # with weighting get re-assigned later anyway)
-  distinct(CBSERIAL, PERNUM, .keep_all = TRUE)
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv')
 
 
 # ==============================================================
 # Neaten and combine
 
-# Add reald categories to both PUMS datasets and rbind them together
-# (it's easier to add reald before they are combined)
-pums = rbind(
-  merge(pums.raw, reald %>% select(CBSERIAL, PERNUM, reald)),
-  merge(synthetic.pums, reald %>% select(CBSERIAL, PERNUM, reald)) %>%
-    mutate(CBSERIAL = -1 * CBSERIAL)
-)
+pums.processed = merge(pums.raw, reald %>% select(CBSERIAL, PERNUM, reald))
+
+pums.synthetic.processed = merge(
+  synthetic.pums %>% select(CBSERIAL, PERNUM, PUMA),
+  pums.processed %>% select(-PUMA)
+) %>%
+  select(names(pums.processed)) %>%
+  arrange(CBSERIAL, PERNUM, PUMA) %>%
+  mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1)
 
 # Combine PUMS and do other processing steps
-pums = pums %>%
+pums = rbind(pums.processed, pums.synthetic.processed) %>%
   # Give me only individuals with poverty listed (in universe)
   filter(POVERTY > 0) %>%
   # Bin age and poverty
   mutate(age = cut(AGE, breaks = c(0, 18, 55, 60, 85, Inf), right = FALSE))
-  
-# Now merge PUMS and weight
-pums.weight = merge(pums, weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'))
 
 
 # ==============================================================
 # Table 1: whole poverty universe
 
-univ.table = pums.weight %>%
+univ.table = pums %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald) %>%
   summarise(TOTAL = sum(alloc)) %>%
   ungroup() %>%
   mutate(tract = as.numeric(gsub('^\\d{4}\\_', '', tract)))
 
 ### For plotting:
-univ.table.plot = merge(multco.tracts, univ.table)
+univ.table.plot = merge(multco.tracts, univ.table) # %>%
+  # mutate(log10n = floor(ifelse()))
 
 ggplot(univ.table.plot) +
   geom_sf(aes(fill = TOTAL)) +
   scale_fill_viridis_c() +
   facet_grid(reald ~ age) +
   theme(legend.position = 'top')
-# a few missing 
 
 univ.table = univ.table %>%
   mutate(
@@ -127,7 +116,8 @@ head(univ.table)
 # ==============================================================
 # Table 2: below the poverty line
 
-sub100.table = pums.weight %>%
+sub100.table = pums %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.100 = POVERTY < 100) %>%
   summarise(TOTAL = sum(alloc)) %>%
   ungroup() %>%
@@ -147,7 +137,20 @@ ggplot(sub100.table.plot) +
 
 sub100.table = sub100.table %>%
   select(-s100FALSE) %>%
-  mutate(age = LETTERS[as.numeric(age)]) %>%
+  mutate(
+    age = LETTERS[as.numeric(age)],
+    reald = case_match(
+      reald,
+      'White' ~ 'W',
+      'Asian' ~ 'A',
+      'AmInd' ~ 'N',
+      'Black' ~ 'B',
+      'NHPI'  ~ 'P',
+      'MENA'  ~ 'E',
+      'HispLat' ~ 'H',
+      'Other' ~ 'O'
+    )
+  ) %>%
   pivot_wider(names_from = age, values_from = s100TRUE)
 
 head(sub100.table)
@@ -156,7 +159,8 @@ head(sub100.table)
 # ==============================================================
 # Table 3: below 2.5X the poverty line
 
-sub250.table = pums.weight %>%
+sub250.table = pums %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.250 = POVERTY < 250) %>%
   summarise(TOTAL = sum(alloc)) %>%
   ungroup() %>%
@@ -198,7 +202,8 @@ head(sub250.table)
 # ==============================================================
 # Table 4: below 4X the poverty line
 
-sub400.table = pums.weight %>%
+sub400.table = pums %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.400 = POVERTY < 400) %>%
   summarise(TOTAL = sum(alloc)) %>%
   ungroup() %>%
@@ -214,7 +219,7 @@ ggplot(sub400.table.plot) +
   facet_grid(reald ~ age) +
   theme(legend.position = 'top')
 
-# Clear east-west dividing line at 
+# Clear east-west dividing line
 
 sub400.table = sub400.table %>%
   select(-s400FALSE) %>%
@@ -236,3 +241,26 @@ sub400.table = sub400.table %>%
 
 head(sub400.table)
 
+
+# ==============================================================
+# Aggregate all tables
+
+tables.out = rbind(
+  univ.table   %>% mutate(table = 'POVTOT'),
+  sub100.table %>% mutate(table = 'POV100'),
+  sub250.table %>% mutate(table = 'POV250'),
+  sub400.table %>% mutate(table = 'POV400')
+) %>%
+  pivot_wider(
+    names_from = c(table, reald), values_from = A:E,
+    names_glue = "{table}_{reald}_{.value}"
+  )
+
+apply(tables.out, 2, \(x) sum(is.na(x))) %>% table()
+
+names(tables.out)
+
+write.csv(
+  tables.out, row.names = FALSE,
+  'multnomah/04_aggregate_weights/phaseII_out/poverty_out.csv'
+)

@@ -51,25 +51,13 @@ multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # Get synthetic records (PUMS and dummy)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv') %>%
-  # Remove the ancestry-only records
-  filter(!is.na(CBSERIAL))
-
-# %>%
-#   # Merge in with PUMS to get other data
-#   merge(pums.raw %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
-#   select(names(pums.raw)) %>%
-#   # Remove duplicates
-#   # (these cause issues when getting the disability-all varb and the duplicates
-#   # with weighting get re-assigned later anyway)
-#   distinct(CBSERIAL, PERNUM, .keep_all = TRUE)
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
 
 
 # ==============================================================
 # Neaten and combine
 
-# Add reald categories to both PUMS datasets and rbind them together
-# (it's easier to add reald before they are combined)
+# process PUMS to assign variables assigned
 pums.processed = pums.raw %>%
   mutate(
     # Get disability
@@ -165,7 +153,7 @@ head(vet.table)
 # Table 2: veterans with disabilities
 
 vet.disb.table = pums %>%
-  filter(VETSTAT > 1, has.diff %in% 'with.disb') %>%
+  filter(VETSTAT > 1, has.diff %in% 'with.disb', !(OCC %in% 9800:9850) & !(GQ %in% 3)) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age) %>%
   summarise(TOTAL = sum(alloc)) %>%
@@ -248,7 +236,7 @@ head(vet.alo.table)
 # Table 5: veterans living in group quarters
 
 vet.gq.table = pums %>%
-  filter(VETSTAT > 1, GQ %in% (3:5)) %>%
+  filter(VETSTAT > 1, GQ %in% (3:4)) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age) %>%
   summarise(TOTAL = sum(alloc)) %>%
@@ -308,7 +296,7 @@ head(vet.mul.table)
 
 vet.nonfam.table = pums %>%
   # Filter out only family households and veterans
-  filter(VETSTAT > 1, family.hous %in% 'nonfam.hou') %>%
+  filter(VETSTAT > 1, family.hous %in% 'nonfam.hou', !(GQ %in% 3:4)) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   # Now aggregate by tract/age
   group_by(tract, age) %>%
@@ -440,8 +428,8 @@ vet.reald.table = pums %>%
 ### For plotting:
 vet.reald.table.plot = merge(multco.tracts, vet.reald.table)
 
-ggplot(vet.reald.table.plot) +
-  geom_sf(aes(fill = TOTAL)) +
+ggplot(vet.reald.table.plot %>% mutate(logtotal = floor(log(TOTAL, base = 10)))) +
+  geom_sf(aes(fill = logtotal)) +
   scale_fill_viridis_c() +
   facet_grid(reald ~ age) +
   theme(legend.position = 'top')
@@ -462,7 +450,7 @@ vet.reald.table = vet.reald.table %>%
       'Other' ~ 'O'
     )
   ) %>%
-  pivot_wider(names_from = age, values_from = TOTAL)
+  pivot_wider(names_from = age, values_from = TOTAL, values_fill = 0)
 
 head(vet.reald.table)
 
@@ -547,7 +535,8 @@ reald.fam.table = reald.fam.table %>%
       'Other' ~ 'O'
     )
   ) %>%
-  pivot_wider(names_from = age, values_from = TOTAL)
+  pivot_wider(names_from = age, values_from = TOTAL, values_fill = 0)
+# imputing zeros
 
 head(reald.fam.table)
 
@@ -586,7 +575,7 @@ ggplot(reald.alo.table.plot) +
 # at older groups though, seems possible
 
 # Convert back to wide
-reald.fam.table = reald.fam.table %>%
+reald.alo.table = reald.alo.table %>%
   mutate(
     age = LETTERS[as.numeric(age)],
     reald = case_match(
@@ -601,16 +590,17 @@ reald.fam.table = reald.fam.table %>%
       'Other' ~ 'O'
     )
   ) %>%
-  pivot_wider(names_from = age, values_from = TOTAL)
+  pivot_wider(names_from = age, values_from = TOTAL, values_fill = 0)
+# note: imputed zeros here
 
-head(reald.fam.table)
+head(reald.alo.table)
 
 
 # ==============================================================
 # Table 15: people in group quarters by race/ethnicity
 
 reald.gq.table = pums %>%
-  filter(GQ %in% 3:5) %>%
+  filter(GQ %in% 3:4) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   # Now aggregate by tract/age
   group_by(tract, reald, age) %>%
@@ -719,7 +709,7 @@ head(reald.mul.table)
 # Table 17: people in nonfamily households by race/ethnicity
 
 reald.nonfam.table = pums %>%
-  filter(family.hous %in% 'nonfam.hou') %>%
+  filter(family.hous %in% 'nonfam.hou', !(GQ %in% 3:4)) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   # Now aggregate by tract/age
   group_by(tract, reald, age) %>%
@@ -735,7 +725,7 @@ ggplot(reald.nonfam.table.plot) +
   scale_fill_viridis_c() +
   facet_grid(reald ~ age) +
   theme(legend.position = 'top')
-# Missing MENA 0-18 in nonfamily households
+
 
 # reald.nonfam.table %>%
 #   mutate(total = cut(TOTAL, breaks = c(0, 10^(-1:4)), labels = c(-Inf, -1:3))) %>%
@@ -784,7 +774,7 @@ reald.single.table.plot = merge(multco.tracts, reald.single.table)
 ggplot(reald.single.table.plot) +
   geom_sf(aes(fill = TOTAL)) +
   scale_fill_viridis_c() +
-  facet_grid(reald ~ age) + s
+  facet_grid(reald ~ age) +
   theme(legend.position = 'top')
 # Missing 85+ year olds in most groups
 
@@ -795,7 +785,6 @@ reald.single.table %>%
   arrange(reald, age) %>%
   print(n = nrow(.))
 # Having few individuals 85+ never married is likely
-# 
 
 # Convert back to wide
 reald.single.table = reald.single.table %>%
@@ -919,7 +908,54 @@ reald.divwid.table = reald.divwid.table %>%
 
 head(reald.mar.table)
 
+
 # ==============================================================
 # Aggregate all tables
 
+vet.tables = rbind(
+  vet.table        %>% mutate(table = 'VET'),
+  vet.disb.table   %>% mutate(table = 'VET_DIS'), 
+  vet.fam.table    %>% mutate(table = 'VET_FAM'), 
+  vet.alo.table    %>% mutate(table = 'VET_ALO'),
+  vet.gq.table     %>% mutate(table = 'VET_GRQ'), 
+  vet.mul.table    %>% mutate(table = 'VET_MUL'), 
+  vet.nonfam.table %>% mutate(table = 'VET_NFH'),
+  vet.single.table %>% mutate(table = 'VET_NVM'),
+  vet.mar.table    %>% mutate(table = 'VET_MAR'), 
+  vet.divwid.table %>% mutate(table = 'VET_DVW')
+)
 
+reald.tables = rbind(
+  reald.total.table  %>% mutate(table = 'TOTAL'),
+  vet.reald.table %>% 
+    mutate(
+      A = 0,
+      table = 'VET'
+    ) %>%
+    select(names(reald.total.table), table),
+  reald.fam.table    %>% mutate(table = 'FAM'), 
+  reald.alo.table    %>% mutate(table = 'ALO'), 
+  reald.gq.table     %>% mutate(table = 'GRQ'), 
+  reald.mul.table    %>% mutate(table = 'MUL'), 
+  reald.nonfam.table %>% mutate(table = 'NFH'),
+  reald.single.table %>% mutate(table = 'NVM'),
+  reald.mar.table    %>% mutate(table = 'MAR'),
+  reald.divwid.table %>% mutate(table = 'DVW')
+)
+
+tables.out = merge(
+  vet.tables %>% 
+    # 'L' for "all races"
+    pivot_wider(names_from = table, values_from = B:E, names_glue = "{table}_L_{.value}"),
+  reald.tables %>%
+    pivot_wider(names_from = c(table, reald), values_from = A:E, names_glue = "{table}_{reald}_{.value}")
+)
+
+head(tables.out)
+
+apply(tables.out, 2, \(x) any(is.na(x))) %>% table()
+
+write.csv(
+  tables.out, row.names = FALSE,
+  'multnomah/04_aggregate_weights/phaseII_out/vet-living-arrangement_out.csv'
+)
