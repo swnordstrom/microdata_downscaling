@@ -109,31 +109,6 @@ pums = pums.raw %>%
 nrow(pums)
 table(pums$PUMA)
 
-# Add synthetic records to PUMS
-synthetic.pums = synthetic.records %>%
-  filter(!is.na(CBSERIAL)) %>%
-  merge(pums %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
-  select(names(pums)) %>%
-  mutate(
-    CBSERIAL = - 1 * CBSERIAL,
-    PERWT = 1,
-    HHWT = 1
-  )
-
-pums = rbind(pums, synthetic.pums)
-
-# Format the other ancestry dummy record sfor controls
-ancestry.dummies = synthetic.records %>%
-  filter(is.na(CBSERIAL)) %>%
-  mutate(
-    # Add in serial number, person number, weight
-    CBSERIAL = -1 * (1:nrow(.)),
-    PERNUM = 1,
-    PERWT = 1,
-  ) %>%
-  # Arrange first four columns
-  select(PUMA, CBSERIAL, PERNUM, PERWT, ancestry) 
-
 
 # ==============================================================
 # Now start formatting data
@@ -394,32 +369,16 @@ x.mat = x.tab %>%
   arrange(CBSERIAL, PERNUM) %>%
   select(CBSERIAL, PERNUM,  PERWT, PUMA, total:last_col())
 
-# Make ancestry dummy records
-# Create synthetic records
-x.mat.dummies = ancestry.dummies %>%
-  # Get disability, race, etc. columns
-  cbind(
-    x.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
-  ) %>%
-  # Add in fields for hitting constraints
-  mutate(
-    # Race
-    rac.black = as.numeric(grepl('Somali', ancestry)),
-    rac.white = as.numeric(grepl('[Aa]rab', ancestry)),
-    # Ancestry
-    # Other = as.numeric(ancestry %in% 'Other'),
-    ReSomalian = as.numeric(ancestry %in% 'ReSomalian'),
-    Other.arab = as.numeric(ancestry %in% 'Other.arab'),
-    # Count towards total
-    total = 1,
-    # Won't do any other controls... hopefully this doesn't cause a problem
-    # Assume all are non-hispanic
-    not.hisp = 1
-  ) %>%
-  # Deselect columns
-  select(-ancestry)
+# Make duplicated synthetic records
+x.mat.synthetic = merge(
+  synthetic.records %>% filter(!is.na(CBSERIAL)) %>% select(CBSERIAL, PERNUM, PUMA),
+  x.mat %>% select(-PUMA)
+) %>%
+  arrange(CBSERIAL, PERNUM, PUMA) %>%
+  mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1, PERWT = 1)
 
-x.mat = rbind(x.mat, x.mat.dummies)
+x.mat = rbind(x.mat, x.mat.synthetic) %>%
+  arrange(CBSERIAL, PERNUM, PUMA)
 
 nrow(x.mat)  
 ncol(x.mat)
@@ -564,9 +523,6 @@ con.list %>%
 # that's probably the issue here
 # oh... but the totals are the same... interesting... maybe for anonymity
 # oh well...
-
-# ==============================================================
-# Export fits
 
 # ==============================================================
 # Assign weights and export
