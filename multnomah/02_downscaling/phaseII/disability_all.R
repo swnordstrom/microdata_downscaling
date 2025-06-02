@@ -35,7 +35,7 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
 # Read in synthetic records
-synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_synthetic_records.csv') # %>%
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_disability_synthetic_records.csv') # %>%
   # mutate(
   #   CBSERIAL = -1 * (1:nrow(.)),
   #   PERNUM = 1,
@@ -106,31 +106,6 @@ pums = pums.raw %>%
 
 nrow(pums)
 table(pums$PUMA)
-
-# Add synthetic records to PUMS
-synthetic.pums = synthetic.records %>%
-  filter(!is.na(CBSERIAL)) %>%
-  merge(pums %>% select(-PUMA), by = c('CBSERIAL', 'PERNUM')) %>%
-  select(names(pums)) %>%
-  mutate(
-    CBSERIAL = - 1 * CBSERIAL,
-    PERWT = 1,
-    HHWT = 1
-  )
-
-pums = rbind(pums, synthetic.pums)
-
-# Format the other ancestry dummy record sfor controls
-ancestry.dummies = synthetic.records %>%
-  filter(is.na(CBSERIAL)) %>%
-  mutate(
-    # Add in serial number, person number, weight
-    CBSERIAL = -1 * (1:nrow(.)),
-    PERNUM = 1,
-    PERWT = 1,
-  ) %>%
-  # Arrange first four columns
-  select(PUMA, CBSERIAL, PERNUM, PERWT, ancestry) 
 
 
 # ==============================================================
@@ -519,46 +494,20 @@ x.anc.mat = pums %>%
 
 dim(x.anc.mat)
 
-# Create synthetic records
-x.mat.dummies = ancestry.dummies %>%
-  # Get disability, race, etc. columns
-  cbind(
-    x.disb.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
-  ) %>%
-  # Get ancestry columns
-  cbind(
-    x.anc.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(Other:unclassified) %>% mutate(across(everything(), ~ 0))
-  ) %>%
-  # Add in fields for hitting constraints
-  mutate(
-    # Race
-    # rac.amind = as.numeric(race  %in% 'amind'),
-    rac.black = as.numeric(grepl('Somali', ancestry)),
-    # rac.nhpac = as.numeric(race %in% 'pacis'),
-    rac.white = as.numeric(grepl('[Aa]rab', ancestry)),
-    # Ancestry
-    # Other = as.numeric(ancestry %in% 'Other'),
-    ReSomalian = as.numeric(ancestry %in% 'ReSomalian'),
-    Other.arab = as.numeric(ancestry %in% 'Other.arab'),
-    # Count towards total
-    total = 1,
-    # Count towards disability universe
-    disb.univ = 1,
-    disb.univ.5p = 1,
-    disb.univ.18p = 1,
-    # Assume all are non-hispanic
-    not.hisp = 1
-  ) %>%
-  # Deselect columns
-  select(-ancestry)
-
-x.mat.dummies[,-(1:4)] %>% apply(1, sum)
-x.mat.dummies[,-(1:4)] %>% apply(2, sum) %>% (\(x) x[x>0])
-    
 # Combine into a single x-matrix
 x.mat = merge(x.disb.mat, x.anc.mat) %>%
-  arrange(CBSERIAL, PERNUM) %>%
-  rbind(x.mat.dummies)
+  arrange(CBSERIAL, PERNUM)
+
+# Make duplicated synthetic records
+x.mat.synthetic = merge(
+  synthetic.records %>% filter(!is.na(CBSERIAL)) %>% select(CBSERIAL, PERNUM, PUMA),
+  x.mat %>% select(-PUMA)
+) %>%
+  arrange(CBSERIAL, PERNUM, PUMA) %>%
+  mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1, PERWT = 1)
+
+x.mat = rbind(x.mat, x.mat.synthetic) %>%
+  arrange(CBSERIAL, PERNUM, PUMA)
 
 head(x.mat)
 nrow(x.mat)
@@ -809,4 +758,8 @@ allo.weights = allo.weights %>%
   mutate(across(c(cbserial, pernum), as.numeric)) # %>%
   # pivot_wider(names_from = tract, values_from = alloc)
 
-write.csv(allo.weights, row.names = FALSE, file = 'multnomah/03_downscale_out/disability_all_weights_redone.csv')
+write.csv(
+  allo.weights, row.names = FALSE, 
+  file = 'multnomah/03_downscale_out/disability_all_weights.csv'
+)
+
