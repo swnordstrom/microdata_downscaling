@@ -593,7 +593,8 @@ x.mat.synthetic = merge(
   mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1, PERWT = 1)
 
 
-x.mat = rbind(x.mat, x.mat.dummies, x.mat.synthetic)
+x.mat = rbind(x.mat, x.mat.dummies, x.mat.synthetic) %>%
+  arrange(CBSERIAL, PERNUM, PUMA)
 
 nrow(x.mat) # aw yea
 

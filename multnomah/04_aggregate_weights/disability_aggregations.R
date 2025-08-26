@@ -51,7 +51,7 @@ multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # Synthetic pums (generated in `make_reld_ancestry_synthetic_records.R`)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_synthetic_records.csv') %>%
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv') %>%
   # Remove the ancestry-only records
   filter(!is.na(CBSERIAL))
 

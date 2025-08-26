@@ -35,7 +35,7 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
 # Read in synthetic records
-synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_disability_synthetic_records.csv') # %>%
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv') # %>%
   # mutate(
   #   CBSERIAL = -1 * (1:nrow(.)),
   #   PERNUM = 1,
@@ -590,117 +590,117 @@ con.list %>% select(-univ) %>% filter(abs(E - pred) >= M)
 # three: pumas 5101, over-estimating in each case (!)
 # males 65-74... 
 
-x.tab %>% filter(PUMA %in% 5101, age.disb %in% '65', sex %in% 'Male') # %>%
-  # filter(DIFFREM %in% 'with.' | DIFFPHYS %in% 'with.'| DIFFCARE %in% 'no.')
-# Okay... we have ~240 records here.
-
-eval.men = con.list %>% 
-  mutate(tract = factor(tract)) %>%
-  filter(puma %in% 5101, grepl('is\\.sex\\.age\\.diff', vartype), grepl('^male\\:\\s65', var_label)) %>%
-  mutate(
-    var_label = !grepl('\\sno\\s', var_label),
-    var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
-  ) 
-
-eval.men %>%
-  ggplot(aes(x = tract, colour = var_label)) +
-  geom_point(aes(y = E, group = var_label), position = position_dodge(width = 0.5)) +
-  geom_point(aes(y = pred, group = var_label), shape = 21, position = position_dodge(width = 0.5)) +
-  scale_shape_manual(values = c(1, 19)) +
-  facet_wrap(~ var_desc) +
-  theme(axis.text.x = element_text(angle = 90))
-
-eval.men %>%
-  mutate(varb = paste0(tract, var_label)) %>%
-  ggplot(aes(x = varb, colour = var_label)) +
-  geom_segment(aes(xend = varb, y = E-M, yend = E+M, colour = var_label)) +
-  geom_point(aes(y = E)) +
-  geom_point(aes(y = pred), shape = 21) +
-  facet_wrap(~ var_desc) +
-  theme(axis.text.x = element_text(angle = 90))
-# Hmm... it does look like there are a nursing home in tract 3502?
-# Lots of individuals with difficulty living alone or exercising self-care but not others?
-# notably this is the one tract that has independent +/ self-care difficulties in high numbers...
-# There is an assisted living facility in (near) this tract. 
-# but there is neither a correspondingly high number of women, or disabled
-# people over age 75 in the tract... or anywhere nearby...
-# So is there a men's shelter here?
-
-eval.tract = con.list %>% 
-  filter(tract %in% '3502') %>%
-  filter(grepl('is\\.sex\\.age\\.diff', vartype)) %>%
-  mutate(
-    has.diff = !grepl('\\sno\\s', var_label),
-    age.grp = gsub('.+\\:\\s(\\d{2}).+', '\\1', var_label),
-    sex = ifelse(grepl('^f', var_label), 'female', 'male'),
-    var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
-  ) 
-
-eval.tract %>%
-  ggplot(aes(x = age.grp, colour = has.diff)) +
-  geom_line(aes(y = E, group = interaction(has.diff, sex))) + 
-  geom_point(aes(y = E, shape = sex), size = 3) +
-  scale_shape_manual(values = c(1, 19)) +
-  facet_wrap(~ var_desc)
-# Hmm... 
-# Very strange.
-# These aren't what we're over-allocating though... the over-allocation is occurring elsewhere
-# probably to allow for a lot of men in this age group in general...
-# This tract looks to have a disproportionate number of men age 67-69 only...?
-
-# Now look at 75+ women being overallocated to tract 201
-
-eval.women = con.list %>% 
-  mutate(tract = factor(tract)) %>%
-  filter(puma %in% 5103, grepl('is\\.sex\\.age\\.diff', vartype), grepl('^female\\:\\s75', var_label)) %>%
-  mutate(
-    var_label = !grepl('\\sno\\s', var_label),
-    var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
-  ) 
-
-eval.women %>%
-  mutate(varb = paste0(tract, var_label)) %>%
-  ggplot(aes(x = varb, colour = var_label)) +
-  geom_segment(aes(xend = varb, y = E-M, yend = E+M, colour = var_label)) +
-  geom_point(aes(y = E)) +
-  geom_point(aes(y = pred), shape = 21) +
-  facet_wrap(~ var_desc) +
-  theme(axis.text.x = element_text(angle = 90))
-# Tract does look somewhat high in impaired women over age 75...
-# surprised though that there are zero women in here with self-care difficulty (acc'd to table)
-# the no vision difficulty is pretty close to the MOE
-# adjacent tract to the W has a higher density of 75-80 aged women
-
-# Oh well. Not horrible.
-
-# Look at bias
-con.list %>%
-  # Remove anything with zero MOE
-  filter(M > 0) %>%
-  # For each puma and constraint type, assess mean bais
-  group_by(puma, vartype) %>%
-  summarise(bias = mean((E - pred) / M)) %>%
-  pivot_wider(names_from = puma, names_prefix = 'p', values_from = bias)
-# Huh that's funny
-# slightly over-allocating race characteristics, underestimating universe sizes (lol)
-# disabilty variables overestimated by 1-2% of the MOE as well
-
-# Ah okay we're missing Other.arabs in PUMS for PUMA 5101, 5103
-# also something happening with somalis in one tract
-con.list %>% 
-  filter(grepl('Somal', var_label), puma  %in% 5103) %>% 
-  arrange(desc(abs(E - pred)/M)) %>%
-  print(n = nrow(.))
-# hmm... wonder what's up with that
-# only one Somali in the PUMS?
-
-x.mat %>% 
-  filter(ReSomalian > 0, PUMA %in% 5103) %>% 
-  select(CBSERIAL, PERNUM) %>% 
-  merge(pums)
-# okay there is only one Somali in the PUMA in the PUMS
-# and she has a person weight of 4
-# guess I could copy a synthetic record over
+# x.tab %>% filter(PUMA %in% 5101, age.disb %in% '65', sex %in% 'Male') # %>%
+#   # filter(DIFFREM %in% 'with.' | DIFFPHYS %in% 'with.'| DIFFCARE %in% 'no.')
+# # Okay... we have ~240 records here.
+# 
+# eval.men = con.list %>% 
+#   mutate(tract = factor(tract)) %>%
+#   filter(puma %in% 5101, grepl('is\\.sex\\.age\\.diff', vartype), grepl('^male\\:\\s65', var_label)) %>%
+#   mutate(
+#     var_label = !grepl('\\sno\\s', var_label),
+#     var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
+#   ) 
+# 
+# eval.men %>%
+#   ggplot(aes(x = tract, colour = var_label)) +
+#   geom_point(aes(y = E, group = var_label), position = position_dodge(width = 0.5)) +
+#   geom_point(aes(y = pred, group = var_label), shape = 21, position = position_dodge(width = 0.5)) +
+#   scale_shape_manual(values = c(1, 19)) +
+#   facet_wrap(~ var_desc) +
+#   theme(axis.text.x = element_text(angle = 90))
+# 
+# eval.men %>%
+#   mutate(varb = paste0(tract, var_label)) %>%
+#   ggplot(aes(x = varb, colour = var_label)) +
+#   geom_segment(aes(xend = varb, y = E-M, yend = E+M, colour = var_label)) +
+#   geom_point(aes(y = E)) +
+#   geom_point(aes(y = pred), shape = 21) +
+#   facet_wrap(~ var_desc) +
+#   theme(axis.text.x = element_text(angle = 90))
+# # Hmm... it does look like there are a nursing home in tract 3502?
+# # Lots of individuals with difficulty living alone or exercising self-care but not others?
+# # notably this is the one tract that has independent +/ self-care difficulties in high numbers...
+# # There is an assisted living facility in (near) this tract. 
+# # but there is neither a correspondingly high number of women, or disabled
+# # people over age 75 in the tract... or anywhere nearby...
+# # So is there a men's shelter here?
+# 
+# eval.tract = con.list %>% 
+#   filter(tract %in% '3502') %>%
+#   filter(grepl('is\\.sex\\.age\\.diff', vartype)) %>%
+#   mutate(
+#     has.diff = !grepl('\\sno\\s', var_label),
+#     age.grp = gsub('.+\\:\\s(\\d{2}).+', '\\1', var_label),
+#     sex = ifelse(grepl('^f', var_label), 'female', 'male'),
+#     var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
+#   ) 
+# 
+# eval.tract %>%
+#   ggplot(aes(x = age.grp, colour = has.diff)) +
+#   geom_line(aes(y = E, group = interaction(has.diff, sex))) + 
+#   geom_point(aes(y = E, shape = sex), size = 3) +
+#   scale_shape_manual(values = c(1, 19)) +
+#   facet_wrap(~ var_desc)
+# # Hmm... 
+# # Very strange.
+# # These aren't what we're over-allocating though... the over-allocation is occurring elsewhere
+# # probably to allow for a lot of men in this age group in general...
+# # This tract looks to have a disproportionate number of men age 67-69 only...?
+# 
+# # Now look at 75+ women being overallocated to tract 201
+# 
+# eval.women = con.list %>% 
+#   mutate(tract = factor(tract)) %>%
+#   filter(puma %in% 5103, grepl('is\\.sex\\.age\\.diff', vartype), grepl('^female\\:\\s75', var_label)) %>%
+#   mutate(
+#     var_label = !grepl('\\sno\\s', var_label),
+#     var_desc = gsub('sex\\sby\\sage\\sby\\s(\\w+)\\s.+', '\\1', gsub('\\-', '', var_desc))
+#   ) 
+# 
+# eval.women %>%
+#   mutate(varb = paste0(tract, var_label)) %>%
+#   ggplot(aes(x = varb, colour = var_label)) +
+#   geom_segment(aes(xend = varb, y = E-M, yend = E+M, colour = var_label)) +
+#   geom_point(aes(y = E)) +
+#   geom_point(aes(y = pred), shape = 21) +
+#   facet_wrap(~ var_desc) +
+#   theme(axis.text.x = element_text(angle = 90))
+# # Tract does look somewhat high in impaired women over age 75...
+# # surprised though that there are zero women in here with self-care difficulty (acc'd to table)
+# # the no vision difficulty is pretty close to the MOE
+# # adjacent tract to the W has a higher density of 75-80 aged women
+# 
+# # Oh well. Not horrible.
+# 
+# # Look at bias
+# con.list %>%
+#   # Remove anything with zero MOE
+#   filter(M > 0) %>%
+#   # For each puma and constraint type, assess mean bais
+#   group_by(puma, vartype) %>%
+#   summarise(bias = mean((E - pred) / M)) %>%
+#   pivot_wider(names_from = puma, names_prefix = 'p', values_from = bias)
+# # Huh that's funny
+# # slightly over-allocating race characteristics, underestimating universe sizes (lol)
+# # disabilty variables overestimated by 1-2% of the MOE as well
+# 
+# # Ah okay we're missing Other.arabs in PUMS for PUMA 5101, 5103
+# # also something happening with somalis in one tract
+# con.list %>% 
+#   filter(grepl('Somal', var_label), puma  %in% 5103) %>% 
+#   arrange(desc(abs(E - pred)/M)) %>%
+#   print(n = nrow(.))
+# # hmm... wonder what's up with that
+# # only one Somali in the PUMS?
+# 
+# x.mat %>% 
+#   filter(ReSomalian > 0, PUMA %in% 5103) %>% 
+#   select(CBSERIAL, PERNUM) %>% 
+#   merge(pums)
+# # okay there is only one Somali in the PUMA in the PUMS
+# # and she has a person weight of 4
+# # guess I could copy a synthetic record over
 
 # ==============================================================
 # Assign weights and export

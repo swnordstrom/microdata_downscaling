@@ -11,15 +11,19 @@ rm(list = ls())
 # Read in raw and curated data
 
 # Get PUMS ddi
-pums.raw.ddi = read_ipums_ddi('multnomah/01_raw_data/usa_00057.xml')
+pums.raw.ddi = read_ipums_ddi('multnomah/01_raw_data/usa_00062.xml')
 
 # Read in PUMS and subset to MultCo
-pums.raw = read_ipums_micro(pums.raw.ddi)
+pums.raw = pums.raw.ddi %>%
+  # Read in data
+  read_ipums_micro() %>%
+  # Subset geography
+  filter(PUMA %in% c(5100 + c(1:3, 5, 14, 16), 1300 + c(1:3, 5, 14, 16)))
 
 # Read in tabular data
-acs.tab.raw1 = read_nhgis('multnomah/01_raw_data/nhgis0038_csv.zip', file_select = 1) %>%
+acs.tab.raw1 = read_nhgis('multnomah/01_raw_data/nhgis0042_csv.zip', file_select = 1) %>%
   filter(grepl('Multno', COUNTY))
-acs.tab.raw2 = read_nhgis('multnomah/01_raw_data/nhgis0038_csv.zip', file_select = 2) %>%
+acs.tab.raw2 = read_nhgis('multnomah/01_raw_data/nhgis0042_csv.zip', file_select = 2) %>%
   filter(grepl('Multno', COUNTY))
 
 # PUMA-tract crosswalk
@@ -30,13 +34,17 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 # Read in the aggregated ancestry counts
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
+# Synthetic records
 # Get synthetic records (PUMS and dummy)
-synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_housing-cost_synthetic_records.csv')
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
+
 
 # ==============================================================
-# Merge data products together and do some pre-processing
+# Combine and massage data (before formatting for data)
 
-# ACS tabular controls
+### Handle tabular constraints
+
+# Format ACS tables and merge in to get PUMAs for each tract
 acs.tab = merge(
   acs.tab.raw1 %>% select(TRACTA, matches('[EM]\\d{3}$')),
   acs.tab.raw2 %>% select(TRACTA, matches('[EM]\\d{3}$'))
@@ -70,22 +78,7 @@ acs.tab = merge(
     # Handle age bins (no decimal)
     var_label = gsub('under\\s(\\d)', '00 to \\1', var_label),
     var_label = gsub('^(\\d{1})\\s', '0\\1 ', var_label),
-    var_label = gsub('\\:\\s(\\d{1})\\s', ': 0\\1 ', var_label),
-    # Handle percentages
-    var_label = gsub('less\\sthan\\s(\\d)', '00.0 to \\1', var_label)
-  ) %>%
-  # Get rid of some duplicate cases
-  filter(
-    # Hispanic total (same as sex/age total)
-    !(form %in% 'ASOB' & var_label %in% 'total')
-  ) %>%
-  # Change 'total' label to race for race columns
-  mutate(
-    var_label = ifelse(
-      form %in% paste0('ASN', 4:9),
-      gsub('^(.+)\\salone.+', '\\1', var_desc),
-      var_label
-    )
+    var_label = gsub('\\:\\s(\\d{1})\\s', ': 0\\1 ', var_label)
   )
 
 # Format the ancestry table
@@ -93,133 +86,99 @@ ancestry.tab = ancestry.tab %>%
   mutate(tract = as.numeric(gsub('\\d+US41051', '', GEOID))) %>%
   merge(puma.tract %>% select(tract, puma)) %>%
   select(tract, puma, var_label = reald, E = ESTIMATE, M = MOE) %>%
-  mutate(
-    form = NA, var_desc = 'ancestry re-groupings', univ = 'people reporting ancestry'
-  ) %>%
-  select(names(acs.tab))
+  # CRUCIAL: want to arrange the rows to conform with hte other table
+  arrange(var_label, tract)
 
-# Combine the acs tables into one:
-acs.tab = rbind(acs.tab, ancestry.tab)
+# Format the PUMS by removing unnecessary columns
 
-### PUMS microdata
-# Get only relevant columns for PUMS and standardize the PUMA labels
 pums = pums.raw %>%
   select(
     -c(
       YEAR, MULTYEAR, SAMPLE, SERIAL, CLUSTER, STATEFIP, COUNTYICP,
-      STRATA, HISPAND, ANCESTR1D, ANCESTR2D, OWNERSHPD
+      STRATA, HISPAND, ANCESTR1D, ANCESTR2D, LANGUAGED, GQ, BPLD
     )
-  )
-
-# Format the other ancestry dummy record sfor controls
-ancestry.dummies = synthetic.records %>%
-  filter(is.na(CBSERIAL)) %>%
-  mutate(
-    # Add in serial number, person number, weight
-    CBSERIAL = -1000 * (1:nrow(.)),
-    PERNUM = 1,
-    PERWT = 1,
   ) %>%
-  # Arrange first four columns
-  select(PUMA, CBSERIAL, PERNUM, PERWT, ancestry) 
+  mutate(PUMA = PUMA + ifelse(PUMA < 5000, (5100-1300), 0))
+
 
 # ==============================================================
-# Get matrices/vectors for PMED-M
+# Now start formatting data
+
+### Format the constraint table (y)
 
 y.tab = acs.tab %>%
+  # Filter out duplicate cases
+  filter(
+    # Total in Hispanic/Latino (ASOB) table is a duplicate
+    !(var_label %in% 'total' & form %in% 'ASOB'),
+    # Total in nativity/citizenship table also duplicated
+    !(var_label %in% 'total' & form %in% 'ASZX'),
+    # FOR THE PURPOSES OF GETTING IMMIGRANT COUNTS ONLY,
+    # get rid of the citizenship table entries for US citizens by birth
+    !(grepl('born', var_label) & form %in% 'ASZX')
+  ) %>%
+  # Classify 
   mutate(
-    ### various totals
-    # grand
+    # Get totals (tract-level total is in ASNQ)
     is.total = form %in% 'ASNQ' & var_label %in% 'total',
-    # housing tenure total
-    is.total.ten = form %in% 'ASTM' & var_label %in% 'total',
-    # renter total
-    is.total.ren = form %in% 'ASVH' & var_label %in% 'total',
-    # owner total
-    is.total.own = form %in% 'ASWA' & var_label %in% 'total',
-    ### race-ethnicity
-    is.rac = form %in% paste0('ASN', 4:9),
-    is.hsp = form %in% 'ASOB',
-    ### sex/age-sex
-    # grand-total for sexes
+    # Whole poverty universe
+    is.total.lang.univ = form %in% 'AS6E' & var_label %in% 'total',
+    # Total sex
     is.sex = form %in% 'ASNQ' & grepl('(fe)?male$', var_label),
-    # age-sex
+    # Sex-age (whole population)
     is.sex.age = form %in% 'ASNQ' & grepl('\\d', var_label),
-    # housing tenure
-    is.ten = form %in% 'ASTM' & grepl('occupied$', var_label),
-    # renter percentage
-    is.ren.pct = form %in% 'ASVH' & !grepl('total', var_label), # grepl('percent', var_label),
-    # renter percentage (NA)
-    # is.ren.pct.nc = form %in% 'ASVH' & grepl('not\\scomput', var_label),
-    # renter other/NA?
-    # householder by age
-    is.own.age = form %in% 'ASWA' & grepl('years', var_label) & !grepl('\\:', var_label),
-    # householder by age by percent
-    is.own.age.pct = form %in% 'ASWA' & grepl('\\:', var_label), # grepl('\\:\\s\\d', var_label),
-    # householder by age by percent (NA)
-    # is.own.age.pct.nc = form %in% 'ASWA' & grepl('not\\scomput', var_label),
-    # group quarters
-    is.gquart = form %in% 'ATFB',
-    # ancestry
-    is.anc = grepl('ancestry', var_desc)
+    # Race totals
+    is.race = form %in% paste0('ASN', 4:9),
+    # Hispanic ethnicity
+    is.hisp = form %in% 'ASOB',
+    # Language (language only)
+    is.lang = form %in% 'AS6E' & !(var_label %in% 'total') & !grepl('\\:', var_label),
+    # Language-proficiency
+    is.lang.prof = form %in% 'AS6E' & grepl('\\:', var_label),
+    # Citizenship
+    is.citz = form %in% 'ASZX'
   ) %>%
+  # Change the var_label to universe for the race (var_label is currently 'total')
+  mutate(var_label = ifelse(is.race, univ, var_label)) %>%
+  # Now, arrange rows
   arrange(
-    # Arrange totals
-    desc(is.total), desc(is.total.ten), desc(is.total.ren), desc(is.total.own),
-    # Arrange group quarters
-    desc(is.gquart),
-    # Arrange race and ethnicity
-    desc(is.rac), desc(is.hsp),
-    # Arrange age/age-sex
-    desc(is.sex), desc(is.sex.age),
-    # Arrange housing tenure
-    desc(is.ten),
-    # Arrange renter cost column
-    desc(is.ren.pct), # desc(is.ren.pct.nc),
-    # Arrange ownership cost
-    desc(is.own.age), desc(is.own.age.pct), # desc(is.own.age.pct.nc),
-    # Arrange ancestry
-    desc(is.anc),
-    # Alphabetize within groups and arrange tracts
-    var_label, tract
+    # Grand total + poverty universe total
+    desc(is.total), desc(is.total.lang.univ),
+    # Race and Hispanic ethnicity
+    desc(is.race), desc(is.hisp),
+    # Sex totals 
+    desc(is.sex), 
+    # Sex-age (grand and disability universe)
+    desc(is.sex.age),
+    # Sex-age-disability combos
+    desc(is.lang), desc(is.lang.prof),
+    # Citizenship
+    desc(is.citz),
+    # Now sort within constraints
+    var_label,
+    # sort geographies
+    tract
   ) %>%
+  # Pivot the constraint label columns
   pivot_longer(where(is.logical), names_to = 'vartype', values_to = 'tf') %>%
-  filter(tf) %>% select(-tf)
+  filter(tf) %>% select(-tf) %>%
+  rbind(
+    ancestry.tab %>%
+      mutate(form = NA, var_desc = NA, univ = NA, vartype = 'is.anc') %>%
+      select(form, tract, puma, var_label, var_desc, univ, E, M, vartype)
+  )
 
-### Get age bins
+# Get age bins
+### Get bounds for PUMS binning
 
-ages.fine = y.tab %>%
-  filter(vartype %in% 'is.sex.age') %>%
-  distinct(var_label) %>%
-  mutate(age = gsub('(fe)?male\\:\\s(\\d{2}).*', '\\2', var_label)) %>%
-  distinct(age) %>% arrange() %>% pull()
+# Fine-grained age groupings
+age.bins = y.tab %>% 
+  filter(vartype %in% 'is.sex.age') %>% distinct(var_label) %>%
+  mutate(age = sub('^[^\\:]+\\:\\s(\\d{2}).+', '\\1', var_label)) %>% 
+  distinct(age) %>% pull()
 
-ages.own = y.tab %>%
-  filter(vartype %in% 'is.own.age') %>%
-  distinct(var_label) %>%
-  mutate(age = gsub('householder\\s(\\d{2}).*', '\\1', var_label)) %>%
-  distinct(age) %>% arrange() %>% pull()
 
-pcts.ren = y.tab %>% 
-  filter(vartype %in% 'is.ren.pct') %>% 
-  distinct(var_label) %>%
-  mutate(pct = gsub('^(\\d{2}).+', '\\1', var_label)) %>%
-  filter(grepl('^\\d{2}$', pct)) %>%
-  distinct(pct) %>% arrange() %>% pull()
-
-pcts.own = y.tab %>% 
-  filter(vartype %in% 'is.own.age.pct') %>% 
-  distinct(var_label) %>%
-  mutate(pct = gsub('.+\\:\\s(\\d{2}).+', '\\1', var_label)) %>%
-  filter(grepl('^\\d{2}$', pct)) %>%
-  distinct(pct) %>% arrange() %>% pull()
-
-ages.fine
-ages.own
-pcts.ren
-pcts.own
-
-### Format PUMS (X)
+### Format the PUMS (X)
 
 x.tab = pums %>%
   # Add and modify columns
@@ -227,56 +186,43 @@ x.tab = pums %>%
     # change sex to character (for sorting)
     sex = as.character(as_factor(SEX)),
     # get age bins
-    age.fine = cut(AGE, c(as.numeric(ages.fine), Inf), right = FALSE, labels = ages.fine),
-    age.own  = cut(AGE, c(as.numeric(ages.own ), Inf), right = FALSE, labels = ages.own ),
-    # housing tenure
-    tenure = case_match(
-      OWNERSHP,
-      0 ~ 'NA',
-      1 ~ 'owner',
-      2 ~ 'renter'
-    ),
-    # estimate housing costs / income - need to do this separately for renters and owners
-    own.pct.num = ifelse(
-      # If respondent is homeowner with positive income and housing cost
-      (OWNERSHP %in% 1 & HHINCOME > 0 & OWNCOST > 0),
-      # get housing cost as a percentage of annual income
-      100 * ((12 * OWNCOST) / HHINCOME),
-      # otherwise give an NA
-      NA
-    ),
-    ren.pct.num = ifelse(
-      # If the respondent is a renter with positive income and rent cost,
-      OWNERSHP %in% 2 & HHINCOME > 0 & RENTGRS > 0,
-      # get rent as a percentage of annual income
-      100 * ((12 * RENTGRS) / HHINCOME),
-      # otherwise give NA
-      NA
-    ),
-    # Get binned household or renter cost percentages
-    own.pct = cut(own.pct.num, breaks = c(as.numeric(pcts.own), 100), right = FALSE, labels = pcts.own),
-    # Get 'not computed' housing costs for owners
-    own.pct = ifelse(
-      OWNERSHP %in% 1 & !(HHINCOME > 0 & OWNCOST > 0),
-      'NC',
-      as.character(own.pct)
-    ),
-    ren.pct = cut(ren.pct.num, breaks = c(as.numeric(pcts.ren), 100), right = FALSE, labels = pcts.ren),
-    # Get 'not computed' housing costs for renters
-    ren.pct = ifelse(
-      OWNERSHP %in% 2 & !(HHINCOME > 0 & RENTGRS > 0),
-      'NC',
-      as.character(ren.pct)
-    ),
+    age = cut(AGE, c(as.numeric(age.bins), Inf), right = FALSE, labels = age.bins),
     # change race to 0/1 (for model matrix)
     across(starts_with('RAC'), ~ . - 1),
     # recode hispanic ethnicity here
-    hispan = ifelse(HISPAN %in% 1:4, 'hisp', 'not.hisp'),
-    # flag for group quarters
-    in.gq = GQ %in% (3:4)
+    HISPAN = ifelse(HISPAN %in% 1:4, 'hisp', 'not.hisp'),
+    # boolean for being age 5+ (for language universe)
+    is.5plus = as.numeric(AGE > 4),
+    # Language
+    language = case_match(
+      # see lang12 in langx
+      LANGUAGE,
+      1 ~ 'speak.only.english',
+      12 ~ 'spanish',
+      57 ~ 'arabic',
+      43 ~ 'chinese',
+      11 ~ 'french.haitian.cajun',
+      2:4 ~ 'german.west.germanic',
+      49 ~ 'korean',
+      18:26 ~ 'russian.polish.slavic',
+      54 ~ 'tagalog',
+      50 ~ 'vietnamese',
+      setdiff(c(2:10, 13:32), c(1:4, 18:26)) ~ 'other.indo-euro',
+      setdiff(40:56, c(43, 49:50, 54)) ~ 'other.asian',
+      .default = 'other.and.unspec'
+    ),
+    proficiency = case_when(
+      !(LANGUAGE %in% 1) & SPEAKENG %in% 2:4 ~ 'eng.very.well',
+      SPEAKENG %in% c(1, 5:6) ~ 'less.than.very.well',
+      .default = NA
+    ),
+    imm.type = case_when(
+      (CITIZEN %in% 2) & (BPL > 120) ~ 'us.citizen.naturalized',
+      (CITIZEN > 2) & (BPL > 120) ~ 'not.a.citizen',
+      .default = NA
+    )
   ) %>%
-  # Now do the ancestry:
-  # Now, get ancestry:
+  # Get ancestry counts here
   mutate(
     # Ancestry (this one will be a doozy!)
     across(
@@ -364,120 +310,79 @@ x.tab = pums %>%
   # Add in 'unidentified' or whatever for the missing ancestries
   mutate(ancestry = ifelse(is.na(ancestry), 'unclassified', ancestry))
 
-# "is.total"          "is.total.ten"      "is.total.ren"      "is.total.own"      "is.rac"            
-# "is.hsp"            "is.sex"            "is.sex.age"        "is.ten"            "is.ren.pct"        
-# "is.ren.pct.na"     "is.own.age"       
-# "is.own.age.pct"    "is.own.age.pct.na" "is.gquart"         "is.anc"  
-
 x.mat = x.tab %>%
-  # Case complete and alphabetize rows
+  # Arrange rows (so that columns are ordered properly)
   complete(
-    sex, nesting(age.fine, age.own), hispan, ancestry, 
-    tenure, in.gq, nesting(own.pct, ren.pct)
+    nesting(RACAMIND, RACASIAN, RACBLK, RACPACIS, RACOTHER, RACWHT), HISPAN,
+    sex, age, ancestry, nesting(language, proficiency), imm.type
   ) %>%
-  arrange(sex, age.fine, age.own, hispan, ancestry, tenure, own.pct, ren.pct) %>%
-  # Make columns for pivoting  
+  arrange(
+    HISPAN, sex, age, language, ancestry, imm.type,
+    CBSERIAL, PERNUM
+  ) %>%
   mutate(
-    ### Totals
-    # Grand total
+    # in total
     total = 1,
-    # Tenure total (people in occupied housing units)
-    total.ten = as.numeric(!in.gq),
-    # Renter total (renter-occupied housing units)
-    total.ren = as.numeric(OWNERSHP %in% 2 & PERNUM < 2),
-    # Owner total (owner-occupied housing units)
-    total.own = as.numeric(OWNERSHP %in% 1 & PERNUM < 2),
-    ### Group quarters
-    gquart = as.numeric(in.gq),
-    ### Race
+    # in disability universe (age groups)
+    total.5plus = as.numeric(is.5plus),
+    # race dummy variables
     rac.amind = RACAMIND,
     rac.asian = RACASIAN,
     rac.black = RACBLK,
-    rac.pacis = RACPACIS,
+    rac.nhpac = RACPACIS,
     rac.other = RACOTHER,
     rac.white = RACWHT,
-    ### Hispanic ancestry
-    hsp.cols = hispan,
-    hsp.ones = 1,
-    ### Sex-age table
-    # Sex totals
+    # Hispanic ethnicity
+    hisp.cols = HISPAN,
+    hisp.ones = 1,
+    # sex groupings
     sex.cols = sex,
     sex.ones = 1,
-    # Sex-age groups
+    # sex-age groupings
     sex.age.sex = sex,
-    sex.age.age = age.fine,
-    sex.age.one = 1,
-    ### Tenure
-    ten.cols = tenure,
-    ten.ones = total.ten,
-    ### Renter cost percentages
-    ren.cols = paste0('ren.', ren.pct),
-    ren.ones = total.ren,
-    ### Owner cost table
-    # Owner ages
-    own.age.cols = paste0('own.', age.own),
-    own.age.ones = total.own,
-    # Owner age by cost
-    own.age.age = paste0('own.', age.own),
-    own.age.own = paste0('own.', own.pct),
-    own.age.one = total.own,
-    ### (ancestry does not need new columns - made above)
-  ) %>%
-  ### Pivot out columns:
-  # Pivot out hispanic ethnicity
-  pivot_wider(names_from = hsp.cols, values_from = hsp.ones, values_fill = 0) %>%
-  # Pivot out sex
+    sex.age.age = age,
+    sex.age.ones = 1,
+    # language columns
+    lang.lang = language,
+    lang.ones = as.numeric(is.5plus),
+    # language-proficiency columns
+    lang.prof.lang = language,
+    lang.prof.prof = proficiency,
+    lang.prof.ones = as.numeric(is.5plus),
+    # immigration/citizenship type
+    citz.cols = imm.type,
+    citz.ones = 1,
+  ) %>% 
+  ### Pivot!
+  # no need to pivot totals
+  # race columns are handled above
+  # pivot out hispanic columns
+  pivot_wider(names_from = hisp.cols, values_from = hisp.ones, values_fill = 0) %>%
+  # pivot out sex totals
   pivot_wider(names_from = sex.cols, values_from = sex.ones, values_fill = 0) %>%
-  # Pivot out sex-age
-  pivot_wider(names_from = c(sex.age.sex, sex.age.age), values_from = sex.age.one, values_fill = 0) %>%
-  # Pivot out tenure 
-  pivot_wider(names_from = ten.cols, values_from = ten.ones, values_fill = 0) %>%
-  # remove NAs
-  select(-matches('NA')) %>%
-  ### Pivot out rental cost percentages
-  pivot_wider(names_from = ren.cols, values_from = ren.ones, values_fill = 0) %>%
-  # remove NAs
-  select(-matches('NA')) %>%
-  # Pivot out homeowner-age columns
-  pivot_wider(names_from = own.age.cols, values_from = own.age.ones, values_fill = 0) %>%
-  # remove NAs
-  select(-matches('NA')) %>%
-  # Pivot out homeowner-age-cost columns
-  pivot_wider(names_from = c(own.age.age, own.age.own), values_from = own.age.one, values_fill = 0) %>%
-  # remove NAs
-  select(-matches('NA')) %>%
-  # Pivot out ancestry
+  # pivot out sex-age combinations
+  pivot_wider(names_from = c(sex.age.sex, sex.age.age), values_from = sex.age.ones, values_fill = 0) %>%
+  # pivot out language groups
+  pivot_wider(names_from = lang.lang, values_from = lang.ones, values_fill = 0) %>%
+  # deselect NA columns
+  select(-c(matches('NA', ignore.case = FALSE))) %>%  
+  # pivot out language-proficiency combos
+  pivot_wider(names_from = c(lang.prof.lang, lang.prof.prof), values_from = lang.prof.ones, values_fill = 0) %>%
+  # pivot out immigration/citizen type
+  pivot_wider(names_from = citz.cols, values_from = citz.ones, values_fill = 0) %>%
+  select(-c(matches('NA', ignore.case = FALSE))) %>%  
+  # pivot out ancestry
   pivot_wider(names_from = ancestry, values_from = n.ancestry, values_fill = 0) %>%
-  ### Get rid of extra columns from case completion
+  # deselect NA columns
+  select(-c(matches('NA\\_', ignore.case = FALSE), matches('\\_NA', ignore.case = FALSE))) %>%
+  # filter out dummy records made by the complete() above
   filter(!is.na(CBSERIAL)) %>%
-  ### arrange by serial and person numbers
   arrange(CBSERIAL, PERNUM) %>%
-  ### Select columns
-  select(CBSERIAL, PERNUM, PERWT, PUMA, total:last_col())
+  select(CBSERIAL, PERNUM,  PERWT, PUMA, total:last_col())
 
-# Make ancestry dummy records
-x.mat.dummies = ancestry.dummies %>%
-  # Get disability, race, etc. columns
-  cbind(
-    x.mat %>% slice(1:nrow(ancestry.dummies)) %>% select(total:last_col()) %>% mutate(across(everything(), ~ 0))
-  ) %>%
-  # Add in fields for hitting constraints
-  mutate(
-    # Race
-    rac.black = as.numeric(grepl('Somali', ancestry)),
-    rac.white = as.numeric(grepl('[Aa]rab', ancestry)),
-    # Ancestry
-    # Other = as.numeric(ancestry %in% 'Other'),
-    ReSomalian = as.numeric(ancestry %in% 'ReSomalian'),
-    Other.arab = as.numeric(ancestry %in% 'Other.arab'),
-    # Count towards total
-    total = 1,
-    # Won't do any other controls... hopefully this doesn't cause a problem
-    # Assume all are non-hispanic
-    not.hisp = 1
-  ) %>%
-  # Deselect columns
-  select(-ancestry)
+ncol(x.mat) - 4
+y.tab %>% filter(tract %in% 101) %>% nrow()
+# promising
 
 # Make duplicated synthetic records
 x.mat.synthetic = merge(
@@ -487,25 +392,17 @@ x.mat.synthetic = merge(
   arrange(CBSERIAL, PERNUM, PUMA) %>%
   mutate(CBSERIAL = -1 * (1:nrow(.)), PERNUM = 1, PERWT = 1)
 
-x.mat = rbind(x.mat, x.mat.dummies, x.mat.synthetic) %>%
-  arrange(CBSERIAL, PERNUM)
-
-### Check for alignment:
-
-ncol(x.mat) - 4
-y.tab %>% filter(tract %in% 101) %>% nrow()
-# too many columns in X...
-
-slicey = 1:50
-slicey = slicey + 50
-slicey = 1:118
+x.mat = rbind(x.mat, x.mat.synthetic) %>%
+  arrange(CBSERIAL, PERNUM, PUMA)
 
 data.frame(
-  x = names(x.mat)[-(1:4)][slicey],
-  y = y.tab %>% distinct(var_label, vartype)  %>% slice(slicey)
+  x = names(x.mat)[-(1:4)],
+  y = y.tab %>% filter(tract %in% 101) %>% pull(var_label)
 )
-# believe we are good...
 
+# looks okay to me
+
+# (add in supplementals here...)
 
 # ==============================================================
 # Press go button!!!
@@ -548,6 +445,8 @@ fit.list = map2(
 )
 
 
+
+
 # ==============================================================
 # Evaluate fits
 
@@ -563,13 +462,10 @@ con.list = map2_df(
 con.list %>% 
   count(puma, in.mar = abs(E - pred) < M) %>%
   pivot_wider(names_from = in.mar, values_from = n, names_prefix = 'in.mar', values_fill = 0)
-# YEYA
 
-con.list %>%
+con.list %>% 
   filter(abs(E - pred) > M)
-
-# Cool - missing ancestry group from PUMS (other arab) and the Somali GQ record
-
+# booyah
 
 # ==============================================================
 # Assign weights and export
@@ -626,4 +522,4 @@ allo.weights = allo.weights %>%
   separate_wider_delim(id, delim = '_', names = c('cbserial', 'pernum')) %>%
   mutate(across(c(cbserial, pernum), as.numeric)) 
 
-write.csv(allo.weights, row.names = FALSE, file = 'multnomah/03_downscale_out/housing-cost_all_weights.csv')
+write.csv(allo.weights, row.names = FALSE, file = 'multnomah/03_downscale_out/languages_all_weights.csv')

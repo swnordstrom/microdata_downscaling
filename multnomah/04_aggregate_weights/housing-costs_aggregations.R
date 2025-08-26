@@ -46,7 +46,7 @@ weights = read.csv('multnomah/03_downscale_out/vets-and-housing_all_weights.csv'
 multco.tracts = tracts('OR', 'Multnomah') %>% mutate(tract = as.numeric(TRACTCE))
 
 # Get synthetic records (PUMS and dummy)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
 
 
 # ==============================================================
@@ -484,7 +484,7 @@ head(reald.o30.table)
 # [7] "reald.total.table"
 
 table.out = rbind(
-  reald.total.table %>% mutate(table = 'TOTAL2'),
+  reald.total.table %>% mutate(table = 'VHCDENOM'),
   reald.inst.table  %>% mutate(table = 'INS'),
   reald.home.table  %>% mutate(table = 'HOM'),
   reald.ren.table   %>% mutate(table = 'REN'),

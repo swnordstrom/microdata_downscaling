@@ -36,7 +36,7 @@ ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_re
 
 # Synthetic records
 # Get synthetic records (PUMS and dummy)
-synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv')
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
 
 
 # ==============================================================

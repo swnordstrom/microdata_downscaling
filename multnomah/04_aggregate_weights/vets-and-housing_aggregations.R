@@ -10,7 +10,7 @@ rm(list = ls())
 # Read in data and estimates
 
 # Read in PUMS and subset to MultCo
-pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00056.xml') %>%
+pums.raw = read_ipums_ddi('multnomah/01_raw_data/usa_00064.xml') %>%
   # Read in data
   read_ipums_micro() %>%
   # Subset geography
@@ -51,7 +51,7 @@ multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # Get synthetic records (PUMS and dummy)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
 
 
 # ==============================================================
@@ -62,7 +62,7 @@ pums.processed = pums.raw %>%
   mutate(
     # Get disability
     has.diff = ifelse(
-      (DIFFSENS > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFCARE > 1) | (DIFFREM > 1),
+      (DIFFEYE > 1) | (DIFFHEAR > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFCARE > 1) | (DIFFREM > 1),
       'with.disb',
       'no.disb'
     ),
@@ -88,7 +88,7 @@ pums.processed = pums.raw %>%
     # family.hous = ifelse(any(PERNUM != FAMUNIT), 'family.hou', 'nonfam.hou')
     family.hous = ifelse(any(RELATE[PERNUM > 1] <= 10), 'fam.hou', 'nonfam.hou'),
     grandparent = ifelse(
-      ((any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
+      (any(GCHOUSE > 1) | (any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
       'witha.grandparent',
       'without.grandparent'
     )
@@ -910,23 +910,50 @@ head(reald.mar.table)
 
 
 # ==============================================================
+# Table 21: grandparents raising grandchildren
+
+total.grp.table = pums %>%
+  filter(GCRESPON > 1) %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
+  # Now aggregate by tract/age
+  group_by(tract, age) %>%
+  summarise(TOTAL = sum(alloc)) %>%
+  ungroup() %>%
+  mutate(tract = as.numeric(gsub('^\\d{4}\\_', '', tract)))
+
+### For plotting:
+total.grp.table.plot = merge(multco.tracts, total.grp.table)
+
+ggplot(total.grp.table.plot) +
+  geom_sf(aes(fill = TOTAL)) +
+  scale_fill_viridis_c() +
+  facet_wrap( ~ age, nrow = 3) +
+  theme(legend.position = 'top')
+# Okay, only one PUMA for 85+
+# Will just impute the rest as zeros
+
+total.grp.table = total.grp.table %>%
+  mutate(age = LETTERS[as.numeric(age)]) %>%
+  pivot_wider(names_from = age, values_from = TOTAL, values_fill = 0)
+
+# ==============================================================
 # Aggregate all tables
 
 vet.tables = rbind(
   vet.table        %>% mutate(table = 'VET'),
-  vet.disb.table   %>% mutate(table = 'VET_DIS'), 
-  vet.fam.table    %>% mutate(table = 'VET_FAM'), 
-  vet.alo.table    %>% mutate(table = 'VET_ALO'),
-  vet.gq.table     %>% mutate(table = 'VET_GRQ'), 
-  vet.mul.table    %>% mutate(table = 'VET_MUL'), 
-  vet.nonfam.table %>% mutate(table = 'VET_NFH'),
-  vet.single.table %>% mutate(table = 'VET_NVM'),
-  vet.mar.table    %>% mutate(table = 'VET_MAR'), 
-  vet.divwid.table %>% mutate(table = 'VET_DVW')
+  vet.disb.table   %>% mutate(table = 'VETDIS'), 
+  vet.fam.table    %>% mutate(table = 'VETFAM'), 
+  vet.alo.table    %>% mutate(table = 'VETALO'),
+  vet.gq.table     %>% mutate(table = 'VETGRQ'), 
+  vet.mul.table    %>% mutate(table = 'VETMUL'), 
+  vet.nonfam.table %>% mutate(table = 'VETNFH'),
+  vet.single.table %>% mutate(table = 'VETNVM'),
+  vet.mar.table    %>% mutate(table = 'VETMAR'), 
+  vet.divwid.table %>% mutate(table = 'VETDVW'),
+  total.grp.table  %>% mutate(table = 'GRP')
 )
 
 reald.tables = rbind(
-  reald.total.table  %>% mutate(table = 'TOTAL'),
   vet.reald.table %>% 
     mutate(
       A = 0,
@@ -959,3 +986,33 @@ write.csv(
   tables.out, row.names = FALSE,
   'multnomah/04_aggregate_weights/phaseII_out/vet-living-arrangement_out.csv'
 )
+
+
+# ==============================================================
+# Writing and exporting just the re-aggregated grp tables
+
+run.logical = FALSE
+
+if (run.logical) {
+  
+  tract.key = read.csv('multnomah/01_raw_data/CenPop2020_Mean_TR41_to_ADVSD_districts.csv') %>%
+    select(tract = TRACTCE, branch = Branch)
+  
+  total.by.age = total.grp.table %>% 
+    mutate(E = 0) %>%
+    merge(tract.key) %>%
+    group_by(branch) %>%
+    summarise(across(B:D, sum)) %>%
+    mutate(L = B + C + D)
+  
+  total.geog = c(
+    branch = 'TOTAL',
+    apply(total.by.age[,-1], 2, sum)
+  )
+  
+  total.grp = rbind(total.by.age, total.geog) %>%
+    rename_with(.cols = -branch, ~ tolower(paste0('GRP_L_', .))) %>%
+    mutate(across(starts_with('grp'), ~ round(as.numeric(.), 1)))
+   
+}
+

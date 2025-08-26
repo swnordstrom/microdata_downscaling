@@ -268,12 +268,12 @@ head(reassigned.diff.reld.serials)
 # Merge to see that we got all we need
 # (n.x and n.y should be the same)
 merge(
-  reassigned.serials %>% count(reald, age),
+  reassigned.diff.reld.serials %>% count(reald, age),
   pums.missing.diff.reald %>% filter(is.na(n)) %>% count(age, reald),
   by = c('reald', 'age'), all = TRUE
 )
 
-records.out = rbind(
+disability.records.out = rbind(
   reassigned.diff.reld.serials %>%
     select(CBSERIAL, PERNUM, PUMA),
   reassigned.ancestry.serials %>%
@@ -281,7 +281,7 @@ records.out = rbind(
 ) %>%
   distinct()
 
-records.out %>% print(n = nrow(.))
+disability.records.out %>% print(n = nrow(.))
 
 # write.csv(records.out, row.names = FALSE, 'multnomah/02_downscaling/phaseII/reld_disability_synthetic_records.csv')
 
@@ -401,7 +401,7 @@ reassigned.reld.pov.univ.serials = pums.missing.reld.pov.univ %>%
 
 ### Combine
 
-records.out = rbind(
+poverty.records.out = rbind(
   reassigned.pov.reld.serials %>%
     select(CBSERIAL, PERNUM, PUMA),
   reassigned.reld.pov.univ.serials %>%
@@ -411,11 +411,11 @@ records.out = rbind(
 ) %>%
   distinct()
 
-records.out %>% print(n = nrow(.))
+poverty.records.out %>% print(n = nrow(.))
 
 # write.csv(
 #   records.out, row.names = FALSE,
-#   'multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv'
+#   'multnomah/02_downscaling/phaseII/reld_poverty_synthetic_records.csv'
 # )
 
 
@@ -1305,7 +1305,7 @@ reassigned.own.reld.serials
 
 ######## Collect into one data frame # THIS IS FOR REAL
 
-records.out = rbind(
+vet.hou.records.out = rbind(
   reassigned.alo.reld.serials,
   reassigned.divwid.reld.serials,
   reassigned.fam.reld.serials,
@@ -1328,142 +1328,301 @@ records.out = rbind(
   rbind(reassigned.ancestry.serials %>% select(CBSERIAL, PERNUM, PUMA)) %>%
   distinct()
 
-nrow(records.out)
+nrow(vet.hou.records.out)
 
 # write.csv(
 #   records.out, row.names = FALSE,
-#   'multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv'
+#   'multnomah/02_downscaling/phaseII/reld_vet_hou_synthetic_records.csv'
 # )
 
 
 # ==============================================================
 # ==============================================================
+# # Housing cost
 
-# See if there are any extra combos we can make using 2022 data...
+# Read in PUMS and subset to MultCo
+pums.raw = read_ipums_micro('multnomah/01_raw_data/usa_00060.xml')
 
-# ==============================================================
-# Read in reld assignments from 2022 ACS
-
-reald22 = read.csv('multnomah/01_raw_data/5acs22_orwa_reldpri.csv') %>%
-  filter(grepl('^2018', serialno)) %>%
-  # fix serial numbers
+pums.lang = pums.raw %>%
+  filter(LANGUAGE > 1) %>%
+  # Add and modify columns
   mutate(
-    serialno = gsub('GQ', '01', serialno),
-    serialno = gsub('HU', '00', serialno)
-  ) %>%
-  # give me reald category
-  mutate(
-    realdcat = case_match(
-      reldpri,
-      c('HisMex', 'HisCen', 'HisOth', 'HisSou') ~ 'HispLat',
-      c('NHPIoth', 'Cham', 'Samoan', 'COFA', 'Marshall', 'NatHaw') ~ 'NHPI',
-      c('WestEur', 'WhiteOth', 'Slavic', 'EastEur') ~ 'White',
-      c('AmInd', 'AlaskNat', 'LatInd') ~ 'AmInd',
-      c('AfrAm', 'African', 'Caribbean', 'Ethiopian', 'Somali') ~ 'Black',
-      c('MidEast', 'NoAfr') ~ 'MENA',
-      c('Chinese', 'Filipino', 'Cambodian', 'Vietnamese', 'Korean', 
-        'Japanese', 'Myanmar', 'AsianInd', 'SoAsian', 'Hmong', 
-        'Laotian', 'AsianOth') ~ 'Asian',
-      'RaceOth' ~ 'Other'
-    )
+    # Language
+    language = case_match(
+      # see lang12 in langx
+      LANGUAGE,
+      1 ~ 'speak.only.english',
+      12 ~ 'spanish',
+      57 ~ 'arabic',
+      43 ~ 'chinese',
+      11 ~ 'french.haitian.cajun',
+      2:4 ~ 'german.west.germanic',
+      49 ~ 'korean',
+      18:26 ~ 'russian.polish.slavic',
+      54 ~ 'tagalog',
+      50 ~ 'vietnamese',
+      setdiff(c(2:10, 13:32), c(1:4, 18:26)) ~ 'other.indo-euro',
+      setdiff(40:56, c(43, 49:50, 54)) ~ 'other.asian',
+      .default = 'other.and.unspec'
+    ),
+    proficiency = case_when(
+      !(LANGUAGE %in% 1) & SPEAKENG %in% 2:4 ~ 'eng.very.well',
+      SPEAKENG %in% c(1, 5:6) ~ 'less.than.very.well',
+      .default = NA
+    ),
+    age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)
   )
 
+####### Get missing PUMA-language-age combos
+
+pums.missing.lang = pums.lang %>%
+  # Get all PUMA-race-age combos present
+  count(PUMA, language, age) %>%
+  # Get all possible combinations (missing will be n == NA)
+  complete(PUMA, language, age) %>%
+  # give me any race-age combo missing from at least one PUMA
+  group_by(language, age) %>%
+  filter(any(is.na(n))) %>%
+  ungroup() %>%
+  arrange(language, age, PUMA)
+
+pums.missing.lang
+# lol... looks like a lot bleh...
+pums.missing.lang %>% 
+  group_by(language, age) %>% filter(any(!is.na(n))) %>% ungroup() %>% 
+  filter(is.na(n)) %>% nrow()
+# okay... 63 new records just to get all language-age combos
+
+### Get sample of dummy PUMS serial numbers, use workflow from above
+set.seed(6650452)
+
+reassigned.lang.serials = pums.missing.lang %>%
+  # Getting just the age-race combos we have records for
+  filter(!is.na(n)) %>%
+  select(-n) %>%
+  # Merge to get records (serial numbers most importantly)
+  merge(pums.lang, all.x = TRUE) %>%
+  # Remove unnecessary columns (importantly, the PUMA column)
+  select(CBSERIAL, PERNUM, PERWT, language, age) %>%
+  # Now, merge back in with the list of PUMA-age-race columns we need
+  # (this is the step where records get duplicated)
+  merge(pums.missing.lang %>% filter(is.na(n)) %>% select(-n)) %>%
+  # Now sample one record per PUMA-age-race column
+  group_by(language, age, PUMA) %>%
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
+
+reassigned.lang.serials
+
+####### Get missing PUMA-language-proficiency combos
+
+pums.missing.lang.prof = pums.lang %>%
+  # subset to *only* low-proficiency individuals
+  filter(proficiency %in% 'less.than.very.well') %>%
+  # Get all PUMA-race-age combos present
+  count(PUMA, language, age) %>%
+  # Get all possible combinations (missing will be n == NA)
+  complete(PUMA, language, age) %>%
+  # give me any race-age combo missing from at least one PUMA
+  group_by(language, age) %>%
+  filter(any(is.na(n))) %>%
+  ungroup() %>%
+  arrange(language, age, PUMA)
+
+pums.missing.lang.prof %>%
+  group_by(language, age) %>% filter(any(!is.na(n))) %>% ungroup() %>% 
+  filter(is.na(n)) %>% nrow()
+# 100 new records... cool
+
+### Get sample of dummy PUMS serial numbers, use workflow from above
+set.seed(3310) # also using same seed as above
+
+reassigned.lang.prof.serials = pums.missing.lang.prof %>%
+  # Getting just the age-race combos we have records for
+  filter(!is.na(n)) %>%
+  select(-n) %>%
+  # Merge to get records (serial numbers most importantly)
+  merge(pums.lang %>% filter(proficiency %in% 'less.than.very.well'), all.x = TRUE) %>%
+  # Remove unnecessary columns (importantly, the PUMA column)
+  select(CBSERIAL, PERNUM, PERWT, language, age) %>%
+  # Now, merge back in with the list of PUMA-age-race columns we need
+  # (this is the step where records get duplicated)
+  merge(pums.missing.lang.prof %>% filter(is.na(n)) %>% select(-n)) %>%
+  # Now sample one record per PUMA-age-race column
+  group_by(language, age, PUMA) %>%
+  slice_sample(n = 1, weight_by = 1 / PERWT) %>%
+  ungroup() %>%
+  select(-PERWT)
+
+reassigned.lang.prof.serials
+
+### Combine
+
+lang.records.out = rbind(
+  reassigned.lang.serials,
+  reassigned.lang.prof.serials
+) %>%
+  select(CBSERIAL, PERNUM, PUMA) %>%
+  rbind(reassigned.ancestry.serials %>% select(CBSERIAL, PERNUM, PUMA)) %>%
+  distinct()
 
 # ==============================================================
-# Read in 2018-2022 ACS PUMS
-
-pums22 = read_ipums_ddi('multnomah/01_raw_data/usa_00058.xml') %>%
-  # Read in data
-  read_ipums_micro() %>%
-  filter(MULTYEAR < 2019) %>%
-  # Fix PUMA
-  mutate(PUMA = ifelse(PUMA > 5100, PUMA, PUMA + (5100-1300))) %>%
-  merge(reald22 %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat)) %>%
-  mutate(age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
-  # Get rid of some unnecessary columns
-  select(-c(ANCESTR1D, ANCESTR2D, VETSTATD, COUNTYICP, STRATA, SERIAL)) %>%
-  # Get living alone and/or multigeneration flags (need to do this on whole
-  # dataset) %>%
-  group_by(CBSERIAL) %>%
-  mutate(
-    lives.alone = ifelse(n() < 2, 'liv.alone', 'not.liv.alone'),
-    family.hous = ifelse(any(RELATE[PERNUM > 1] <= 10), 'fam.hou', 'nonfam.hou'),
-    grandparent = ifelse(
-      ((any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
-      'witha.grandparent',
-      'without.grandparent'
-    )
-  ) %>%
-  ungroup()
-
-rm(missing.ancestry)
-
 # ==============================================================
-# Get non-reld misses and reconcile with PUMS
 
-misses.non.reld = ls() %>% 
-  grep('missing', ., value = TRUE) %>% 
-  grep('rea?ld', ., value = TRUE, invert = TRUE) %>%
-  as.list() %>% 
-  lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
+# synthetic.poverty = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv')
+# synthetic.vet.hou = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
+# synthetic.disabil = read.csv('multnomah/02_downscaling/phaseII/reld_disability_synthetic_records.csv')
+# synthetic.houcost = read.csv('multnomah/02_downscaling/phaseII/reld_housing-cost_synthetic_records.csv')
 
-misses.non.reld = misses.non.reld %>% 
-  do.call(what = rbind) %>%
-  mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
-  group_by(age, table.is) %>%
-  filter(all(is.na(n)))
+all.records.out = rbind(
+  disability.records.out, 
+  poverty.records.out, 
+  vet.hou.records.out,
+  lang.records.out
+) %>%
+  distinct()
 
-# ah these are both because there are no under-18 vets...
+nrow(all.records.out)
+# lol
+
+write.csv(
+  all.records.out,
+  'multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv',
+  row.names = FALSE
+)
 
 
-# ==============================================================
-# Get eld misses and reconcile with PUMS
 
-misses.reld = ls() %>% 
-  grep('missing', ., value = TRUE) %>% 
-  grep('rea?ld', ., value = TRUE) %>%
-  as.list() %>% 
-  lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
-
-misses.reld = misses.reld %>% 
-  do.call(what = rbind) %>%
-  mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
-  group_by(age, reald, table.is) %>%
-  filter(all(is.na(n))) %>%
-  distinct(age, reald, table.is) %>%
-  arrange(reald, age) %>%
-  ungroup()
-
-# Looks like a lot!
-
-# Merge this with the pums22 to see if we can fish anything out...
-
-in.old.pums = merge(pums22, misses.reld, by = c('age', 'reald'))
-# Hmm... okay let's see what happens
-
-# Okay I think we'll need to make a lot of new columns...
-
-in.old.pums %>%
-  mutate(
-    is.vet = VETSTAT > 1 & grepl('vet', table.is),
-    nowmar = MARST %in% 1:3 & grepl('nowmar', table.is),
-    divwid = MARST %in% 4 &   grepl('divwid', table.is),
-    in.ins = GQ %in% 3 &      grepl('inst', table.is),
-    nonfam = family.hous %in% 'nonfam.hou' & grepl('nonfam', table.is),
-    in.grq = GQ %in% 3:4 & grepl('gq', table.is),
-    is.alo = lives.alone %in% 'liv.alone' & grepl('alo', table.is),
-    is.dis = ((DIFFREM > 1) | (DIFFPHYS > 1) | (DIFFMOB > 1) | (DIFFCARE > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1)) &
-      !(OCC %in% 9800:9850) & !(GQ %in% 3) & grepl('diff', table.is)
-  ) %>%
-  filter(if_any(where(is.logical)))
-
-# grand total of four records...
-
-in.old.pums %>% filter(grepl('vet', table.is)) %>% count(VETSTAT)
-in.old.pums %>% filter(grepl('nowmar', table.is)) %>% count(MARST)
-in.old.pums %>% filter(grepl('divwid', table.is)) %>% count(MARST)
-in.old.pums %>% filter(grepl('nonfam', table.is)) %>% count(family.hous)
-in.old.pums %>% filter(grepl('alo', table.is)) %>% count(lives.alone)
-in.old.pums %>% filter(grepl('diff', table.is))
-
-# Hmm... lol
+# # ==============================================================
+# # ==============================================================
+# 
+# 
+# # See if there are any extra combos we can make using 2022 data...
+# 
+# # ==============================================================
+# # Read in reld assignments from 2022 ACS
+# 
+# reald22 = read.csv('multnomah/01_raw_data/5acs22_orwa_reldpri.csv') %>%
+#   filter(grepl('^2018', serialno)) %>%
+#   # fix serial numbers
+#   mutate(
+#     serialno = gsub('GQ', '01', serialno),
+#     serialno = gsub('HU', '00', serialno)
+#   ) %>%
+#   # give me reald category
+#   mutate(
+#     realdcat = case_match(
+#       reldpri,
+#       c('HisMex', 'HisCen', 'HisOth', 'HisSou') ~ 'HispLat',
+#       c('NHPIoth', 'Cham', 'Samoan', 'COFA', 'Marshall', 'NatHaw') ~ 'NHPI',
+#       c('WestEur', 'WhiteOth', 'Slavic', 'EastEur') ~ 'White',
+#       c('AmInd', 'AlaskNat', 'LatInd') ~ 'AmInd',
+#       c('AfrAm', 'African', 'Caribbean', 'Ethiopian', 'Somali') ~ 'Black',
+#       c('MidEast', 'NoAfr') ~ 'MENA',
+#       c('Chinese', 'Filipino', 'Cambodian', 'Vietnamese', 'Korean', 
+#         'Japanese', 'Myanmar', 'AsianInd', 'SoAsian', 'Hmong', 
+#         'Laotian', 'AsianOth') ~ 'Asian',
+#       'RaceOth' ~ 'Other'
+#     )
+#   )
+# 
+# 
+# # ==============================================================
+# # Read in 2018-2022 ACS PUMS
+# 
+# pums22 = read_ipums_ddi('multnomah/01_raw_data/usa_00058.xml') %>%
+#   # Read in data
+#   read_ipums_micro() %>%
+#   filter(MULTYEAR < 2019) %>%
+#   # Fix PUMA
+#   mutate(PUMA = ifelse(PUMA > 5100, PUMA, PUMA + (5100-1300))) %>%
+#   merge(reald22 %>% select(CBSERIAL = serialno, PERNUM = sporder, reald = realdcat)) %>%
+#   mutate(age = cut(AGE, c(0, 18, 55, 60, 85, Inf), right = FALSE)) %>%
+#   # Get rid of some unnecessary columns
+#   select(-c(ANCESTR1D, ANCESTR2D, VETSTATD, COUNTYICP, STRATA, SERIAL)) %>%
+#   # Get living alone and/or multigeneration flags (need to do this on whole
+#   # dataset) %>%
+#   group_by(CBSERIAL) %>%
+#   mutate(
+#     lives.alone = ifelse(n() < 2, 'liv.alone', 'not.liv.alone'),
+#     family.hous = ifelse(any(RELATE[PERNUM > 1] <= 10), 'fam.hou', 'nonfam.hou'),
+#     grandparent = ifelse(
+#       ((any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
+#       'witha.grandparent',
+#       'without.grandparent'
+#     )
+#   ) %>%
+#   ungroup()
+# 
+# rm(missing.ancestry)
+# 
+# # ==============================================================
+# # Get non-reld misses and reconcile with PUMS
+# 
+# misses.non.reld = ls() %>% 
+#   grep('missing', ., value = TRUE) %>% 
+#   grep('rea?ld', ., value = TRUE, invert = TRUE) %>%
+#   as.list() %>% 
+#   lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
+# 
+# misses.non.reld = misses.non.reld %>% 
+#   do.call(what = rbind) %>%
+#   mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
+#   group_by(age, table.is) %>%
+#   filter(all(is.na(n)))
+# 
+# # ah these are both because there are no under-18 vets...
+# 
+# 
+# # ==============================================================
+# # Get eld misses and reconcile with PUMS
+# 
+# misses.reld = ls() %>% 
+#   grep('missing', ., value = TRUE) %>% 
+#   grep('rea?ld', ., value = TRUE) %>%
+#   as.list() %>% 
+#   lapply(FUN = \(x) get(x) %>% mutate(table.is = deparse(x)))
+# 
+# misses.reld = misses.reld %>% 
+#   do.call(what = rbind) %>%
+#   mutate(table.is = gsub('\\"(.+)\\"', '\\1', table.is)) %>%
+#   group_by(age, reald, table.is) %>%
+#   filter(all(is.na(n))) %>%
+#   distinct(age, reald, table.is) %>%
+#   arrange(reald, age) %>%
+#   ungroup()
+# 
+# # Looks like a lot!
+# 
+# # Merge this with the pums22 to see if we can fish anything out...
+# 
+# in.old.pums = merge(pums22, misses.reld, by = c('age', 'reald'))
+# # Hmm... okay let's see what happens
+# 
+# # Okay I think we'll need to make a lot of new columns...
+# 
+# in.old.pums %>%
+#   mutate(
+#     is.vet = VETSTAT > 1 & grepl('vet', table.is),
+#     nowmar = MARST %in% 1:3 & grepl('nowmar', table.is),
+#     divwid = MARST %in% 4 &   grepl('divwid', table.is),
+#     in.ins = GQ %in% 3 &      grepl('inst', table.is),
+#     nonfam = family.hous %in% 'nonfam.hou' & grepl('nonfam', table.is),
+#     in.grq = GQ %in% 3:4 & grepl('gq', table.is),
+#     is.alo = lives.alone %in% 'liv.alone' & grepl('alo', table.is),
+#     is.dis = ((DIFFREM > 1) | (DIFFPHYS > 1) | (DIFFMOB > 1) | (DIFFCARE > 1) | (DIFFEYE > 1) | (DIFFHEAR > 1)) &
+#       !(OCC %in% 9800:9850) & !(GQ %in% 3) & grepl('diff', table.is)
+#   ) %>%
+#   filter(if_any(where(is.logical)))
+# 
+# # grand total of four records...
+# 
+# in.old.pums %>% filter(grepl('vet', table.is)) %>% count(VETSTAT)
+# in.old.pums %>% filter(grepl('nowmar', table.is)) %>% count(MARST)
+# in.old.pums %>% filter(grepl('divwid', table.is)) %>% count(MARST)
+# in.old.pums %>% filter(grepl('nonfam', table.is)) %>% count(family.hous)
+# in.old.pums %>% filter(grepl('alo', table.is)) %>% count(lives.alone)
+# in.old.pums %>% filter(grepl('diff', table.is))
+# 
+# # Hmm... lol

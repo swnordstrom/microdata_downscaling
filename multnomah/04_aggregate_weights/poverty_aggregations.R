@@ -49,7 +49,7 @@ multco.tracts = tracts('OR', 'Multnomah') %>%
   mutate(tract = as.numeric(TRACTCE))
 
 # Get synthetic records (PUMS and dummy)
-synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_poverty_synthetic_records.csv')
+synthetic.pums = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
 
 
 # ==============================================================
@@ -68,15 +68,56 @@ pums.synthetic.processed = merge(
 # Combine PUMS and do other processing steps
 pums = rbind(pums.processed, pums.synthetic.processed) %>%
   # Give me only individuals with poverty listed (in universe)
-  filter(POVERTY > 0) %>%
+  mutate(in.pov.univ = POVERTY > 0) %>%
   # Bin age and poverty
   mutate(age = cut(AGE, breaks = c(0, 18, 55, 60, 85, Inf), right = FALSE))
+
+# ==============================================================
+# Table 0: whole race/age count (not subsetting to poverty universe)
+
+total.table = pums %>%
+  merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
+  group_by(tract, age, reald) %>%
+  summarise(TOTAL = sum(alloc)) %>%
+  ungroup() %>%
+  mutate(tract = as.numeric(gsub('^\\d{4}\\_', '', tract)))
+
+### For plotting:
+total.table.plot = merge(multco.tracts, total.table) # %>%
+# mutate(log10n = floor(ifelse()))
+
+ggplot(total.table.plot) +
+  geom_sf(aes(fill = TOTAL)) +
+  scale_fill_viridis_c() +
+  facet_grid(reald ~ age) +
+  theme(legend.position = 'top')
+
+total.table = total.table %>%
+  mutate(
+    age = LETTERS[as.numeric(age)],
+    reald = case_match(
+      reald,
+      'White' ~ 'W',
+      'Asian' ~ 'A',
+      'AmInd' ~ 'N',
+      'Black' ~ 'B',
+      'NHPI'  ~ 'P',
+      'MENA'  ~ 'E',
+      'HispLat' ~ 'H',
+      'Other' ~ 'O'
+    )
+  ) %>%
+  pivot_wider(names_from = age, values_from = TOTAL)
+
+head(total.table)
+# should also pivot out reald
 
 
 # ==============================================================
 # Table 1: whole poverty universe
 
 univ.table = pums %>%
+  filter(in.pov.univ) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald) %>%
   summarise(TOTAL = sum(alloc)) %>%
@@ -117,6 +158,7 @@ head(univ.table)
 # Table 2: below the poverty line
 
 sub100.table = pums %>%
+  filter(in.pov.univ) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.100 = POVERTY < 100) %>%
   summarise(TOTAL = sum(alloc)) %>%
@@ -160,6 +202,7 @@ head(sub100.table)
 # Table 3: below 2.5X the poverty line
 
 sub250.table = pums %>%
+  filter(in.pov.univ) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.250 = POVERTY < 250) %>%
   summarise(TOTAL = sum(alloc)) %>%
@@ -203,6 +246,7 @@ head(sub250.table)
 # Table 4: below 4X the poverty line
 
 sub400.table = pums %>%
+  filter(in.pov.univ) %>%
   merge(weights, by.x = c('CBSERIAL', 'PERNUM'), by.y = c('cbserial', 'pernum'), all.x = TRUE) %>%
   group_by(tract, age, reald, sub.400 = POVERTY < 400) %>%
   summarise(TOTAL = sum(alloc)) %>%

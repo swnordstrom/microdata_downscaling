@@ -11,15 +11,15 @@ rm(list = ls())
 # Read in raw and curated data
 
 # Get PUMS ddi
-pums.raw.ddi = read_ipums_ddi('multnomah/01_raw_data/usa_00059.xml')
+pums.raw.ddi = read_ipums_ddi('multnomah/01_raw_data/usa_00064.xml')
 
 # Read in PUMS and subset to MultCo
 pums.raw = read_ipums_micro(pums.raw.ddi)
 
 # Read in tabular data
-acs.tab.raw1 = read_nhgis('multnomah/01_raw_data/nhgis0039_csv.zip', file_select = 1) %>%
+acs.tab.raw1 = read_nhgis('multnomah/01_raw_data/nhgis0043_csv.zip', file_select = 1) %>%
   filter(grepl('Multno', COUNTY))
-acs.tab.raw2 = read_nhgis('multnomah/01_raw_data/nhgis0039_csv.zip', file_select = 2) %>%
+acs.tab.raw2 = read_nhgis('multnomah/01_raw_data/nhgis0043_csv.zip', file_select = 2) %>%
   filter(grepl('Multno', COUNTY))
 
 # PUMA-tract crosswalk
@@ -31,7 +31,7 @@ puma.tract = read.csv('multnomah/01_raw_data/2020_Census_Tract_to_2020_PUMA.csv'
 ancestry.tab = read.csv('multnomah/01_raw_data/variance_tables/tract_ancestry_reald.csv')
 
 # Get synthetic records (PUMS and dummy)
-synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_ancestry_vet_hou_synthetic_records.csv')
+synthetic.records = read.csv('multnomah/02_downscaling/phaseII/reld_all_synthetic_records.csv')
 
 # ==============================================================
 # Merge data products together and do some pre-processing
@@ -83,10 +83,14 @@ acs.tab = merge(
     !(form %in% 'ASPP' & grepl('spouse', var_label)),
     # Get rid of sub-cases of family households
     !(form %in% 'ASOW' & grepl('^family\\shouseholds?\\:', var_label)),
-    # Get rid of the finer-grained estimates on grandparents 
-    !(form %in% 'AS4J' & grepl('\\:', var_label)),
-    # Household total (duplicarted between grandparents and household type table)
-    !(form %in% 'AS4J' & var_label %in% 'total')
+    # # Get rid of the finer-grained estimates on grandparents
+    # !(form %in% 'AS4J' & grepl('\\:', var_label)),
+    # # Household total (duplicarted between grandparents and household type table)
+    # !(form %in% 'AS4J' & var_label %in% 'total'),
+    # # # Get rid of households with/without grandparents (covered by separate dataset)
+    !(form %in% 'AS4J'),
+    # Getting rid of extra info (e.g., age breakdowns) on grandparents raising grandchildren
+    !(form %in% 'AS32' & grepl('\\:', var_label))
   ) %>%
   # Change 'total' label to race for race columns
   mutate(
@@ -136,6 +140,8 @@ y.tab = acs.tab %>%
     is.vet.total = form %in% 'ASSH' & var_label %in% 'total',
     is.mar.total = form %in% 'ASPP' & var_label %in% 'total',
     is.dis.total = form %in% 'AS78' & var_label %in% 'total',
+    # grandparent total
+    is.gpa.total = form %in% 'AS32' & var_label %in% 'total',
     # housing tenure total
     is.ten.total = form %in% 'ASTM' & var_label %in% 'total',
     # renter total
@@ -168,8 +174,10 @@ y.tab = acs.tab %>%
     is.fam.hou = form %in% 'ASOW' & grepl('households?$', var_label),
     # household type, more detail
     is.fam.hou.type = form %in% 'ASOW' & grepl('households?\\:', var_label),
-    # grandparesnts present/absent
-    is.grandp = form %in% 'AS4J' & grepl('grandp', var_label),
+    # # grandparents present/absent
+    # is.gpa.hh  = form %in% 'AS4J' & grepl('grandp', var_label),
+    # grandparent responsibility
+    is.gpa.rsp = form %in% 'AS32' & grepl('responsible', var_label),
     # housing tenure
     is.ten = form %in% 'ASTM' & grepl('occupied$', var_label),
     # renter percentage
@@ -192,8 +200,8 @@ y.tab = acs.tab %>%
   arrange(
     ### Arranging among group types:
     # Arrange totals
-    desc(is.total), desc(is.vet.total), desc(is.mar.total), desc(is.dis.total), desc(is.hou.total),
-    desc(is.ten.total), desc(is.ren.total), desc(is.own.total),
+    desc(is.total), desc(is.vet.total), desc(is.mar.total), desc(is.dis.total), desc(is.gpa.total),
+    desc(is.hou.total), desc(is.ten.total), desc(is.ren.total), desc(is.own.total),
     # Arrange group quarters
     desc(is.gquart),
     # Arrange race and hispanic ethnicity
@@ -209,7 +217,9 @@ y.tab = acs.tab %>%
     # Arrange housing variables
     desc(is.fam.hou), desc(is.fam.hou.type),
     # Arrange grandparents
-    desc(is.grandp),
+    # desc(is.gpa.hh), desc(is.gpa.rsp),
+    # Keeping this in backwards order to match X
+    desc(is.gpa.rsp),
     # Arrange housing tenure
     desc(is.ten),
     # Arrange renter cost column
@@ -285,7 +295,7 @@ x.tab = pums %>%
     sex = ifelse(SEX > 1, 'female', 'male'),
     # Get disability
     has.diff = ifelse(
-      (DIFFSENS > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFCARE > 1) | (DIFFREM > 1),
+      (DIFFEYE > 1) | (DIFFHEAR > 1) | (DIFFMOB > 1) | (DIFFPHYS > 1) | (DIFFCARE > 1) | (DIFFREM > 1),
       'with.disb',
       'no.disb'
     ),
@@ -354,19 +364,20 @@ x.tab = pums %>%
     in.dis.univ = as.numeric(!(OCC %in% 9800:9850) & !(GQ %in% 3)),
     in.mar.univ = as.numeric(AGE > 14),
     # in.gq   = (GQ %in% 3:4),
-    in.inst = GQ %in% 3
+    in.inst = GQ %in% 3,
+    # grandparent = ifelse(GCHOUSE %in% 2, 'is.grandparent', 'is.not.grandparent'),
+    g.raising.g = case_when(
+      (GCHOUSE %in% 2) & GCRESPON %in% 2 ~ 'responsible',
+      (GCHOUSE %in% 2) & GCRESPON %in% 1 ~ 'not.responsible',
+      .default = NA
+    )
   ) %>%
   # Add household stats
   group_by(CBSERIAL) %>%
   mutate(
     lives.alone = ifelse(n() < 2, 'liv.alone', 'not.liv.alone'),
-    # family.hous = ifelse(any(PERNUM != FAMUNIT), 'family.hou', 'nonfam.hou')
     family.hous = ifelse(any(RELATE[PERNUM > 1] <= 10), 'fam.hou', 'nonfam.hou'),
-    grandparent = ifelse(
-      ((any(RELATE %in% 9)) | (any(RELATE %in% 3:4) & any(RELATE %in% 5:6))),
-      'witha.grandparent',
-      'without.grandparent'
-    )
+    # multigen    = case_(any(GCHOUSE > 1) & n() > 1, 'is.multigen', 'is.not.multigen')
   ) %>%
   ungroup() %>%
   # Now, get ancestry:
@@ -463,17 +474,20 @@ x.tab = pums %>%
 # (because otherwise there's a memory overflow)
 
 x.mat.vet.hous = x.tab %>%
+  select(-c(ancestry, n.ancestry)) %>%
   # Get one row per individual only
   distinct(CBSERIAL, PERNUM, .keep_all = TRUE) %>%
   # Arranging rows here (which will reorder columns below)
   complete(
     sex, nesting(age.fine, age.vets, age.disb), hispanic,
     mar, veteran, has.diff, nesting(family.hous, lives.alone),
+    g.raising.g,
     nesting(tenure, age.owns), nesting(own.pct, ren.pct)
   ) %>%
   arrange(
     sex, age.fine, age.vets, age.disb, hispanic, 
-    mar, veteran, has.diff, family.hous, grandparent,
+    mar, veteran, has.diff, family.hous, 
+    g.raising.g,
     tenure, ren.pct, age.owns, own.pct
   ) %>%
   # Start pivots
@@ -486,6 +500,8 @@ x.mat.vet.hous = x.tab %>%
     total.mar = in.mar.univ,
     # Total for disability universe
     total.dis = in.dis.univ,
+    # Total number of grandparents
+    total.grp = as.numeric(GCHOUSE > 1),
     # Household total (only count `1` for household head)
     total.hou = as.numeric(PERNUM < 2 & !(GQ %in% 3:4)),
     # Tenure total (people in occupied housing units)
@@ -563,9 +579,12 @@ x.mat.vet.hous = x.tab %>%
     hou.alo.hou = family.hous,
     hou.alo.alo = lives.alone,
     hou.alo.one = total.hou,
-    ### Grandparents
-    gpa.cols = grandparent,
-    gpa.ones = total.hou,
+    # ### Household with/without grandparent
+    # gpa.cols = is.grpar.hh,
+    # gpa.ones = total.hou,
+    ### Grandparent-grandchild responsibility
+    gpa.cols = g.raising.g,
+    gpa.ones = total.grp,
     ### Tenure
     ten.cols = tenure,
     ten.ones = total.ten,
@@ -638,7 +657,7 @@ x.mat.vet.hous = x.tab %>%
   pivot_wider(names_from = c(hou.alo.hou, hou.alo.alo), values_from = hou.alo.one, values_fill = 0) %>%
   # Remove 'family-living alone'
   select(-matches('^fam.+liv')) %>%
-  ### Pivot out grandparents
+  # ### Pivot out grandparents
   pivot_wider(names_from = gpa.cols, values_from = gpa.ones, values_fill = 0) %>%
   # remove NAs
   select(-matches('NA')) %>%
@@ -701,7 +720,7 @@ y.tab %>% count(tract)
 slicey = 1:50
 slicey = slicey + 50
 
-# slicey = 1:214
+# slicey = 1:215
 
 data.frame(
   x = names(x.mat)[-(1:4)][slicey],
@@ -783,105 +802,105 @@ con.list %>%
   ggplot(aes(x = E, y = pred, fill = vartype)) +
   geom_point(shape = 21, size = 3)
 
-y.puma.totals = y.tab %>%
-  group_by(tract) %>%
-  mutate(cons.no = 1:n()) %>%
-  group_by(puma, cons.no, form, var_label, vartype) %>% 
-  summarise(e = sum(E))
-
-x.totals = x.mat %>%
-  mutate(across(-c(CBSERIAL, PERNUM, PERWT, PUMA), ~ PERWT * .)) %>%
-  group_by(PUMA) %>%
-  summarise(across(-c(CBSERIAL, PERNUM, PERWT), sum)) %>%
-  ungroup()
-
-x.totals
-
-compare.totals = cbind(
-  y.puma.totals %>% arrange(cons.no) %>% pivot_wider(names_from = puma, values_from = e, names_prefix = 'py.'),
-  x.totals %>% pivot_longer(-PUMA, names_to = 'x.cons', values_to = 'val') %>% pivot_wider(names_from = PUMA, values_from = val, names_prefix = 'px.')
-) %>%
-  pivot_longer(matches('^p[xy]'), names_to = 'pp', values_to = 'val') %>%
-  separate_wider_delim(pp, names = c('source', 'puma'), delim = '.') %>%
-  pivot_wider(names_from = source, values_from = val)
-
-compare.totals %>%
-  ggplot(aes(x = px, y = py, colour = vartype)) +
-  geom_segment(aes(xend = py, yend = py)) +
-  geom_point(size = 3) # +
-# coord_fixed() +
-# facet_wrap(~ vartype, scales = 'free')
-# okay I'm not sure what's going on here...
-
-compare.totals %>% 
-  arrange(desc(abs(px - py) / (px + py)))
-
-compare.totals %>%
-  filter(vartype %in% 'is.fam.hou.type') %>%
-  ggplot(aes(x = px, y = py, colour = var_label)) +
-  annotate('segment', x = 1, y = 1, xend = 40000, yend = 40000, linetype = 2, colour = 'gray55') +
-  geom_point(size = 3) +
-  theme(legend.position = 'top')
-
-compare.totals %>% 
-  filter(grepl('hou', vartype)) %>% 
-  ggplot(aes(x = px, y = py)) + 
-  geom_segment(aes(xend = py, yend = py)) +
-  geom_point(aes(colour = vartype), size = 3) +
-  labs(x = 'from PUMS', y = 'from ACS tables')
-
-# over-counting non-family households where the householder is living alone...
-# maybe because GQs are being counted?
-
-compare.totals %>% 
-  filter(grepl('is.fam.hou.type', vartype)) %>% 
-  ggplot(aes(x = px, y = py)) + 
-  geom_segment(aes(xend = py, yend = py)) +
-  geom_point(aes(colour = var_label), size = 3) +
-  labs(x = 'from PUMS', y = 'from ACS tables')
-# living alone counts still look like undercounts
-
-compare.totals %>% 
-  filter(grepl('is.fam.hou$', vartype)) %>% 
-  ggplot(aes(x = px, y = py)) + 
-  geom_segment(aes(xend = py, yend = py)) +
-  geom_point(aes(colour = var_label), size = 3) +
-  labs(x = 'from PUMS', y = 'from ACS tables')
-# non-family households are being way over-counted
-# family households are being way under-counted
-
-compare.totals %>% 
-  filter(grepl('is.grandp', vartype)) %>% 
-  ggplot(aes(x = px, y = py)) + 
-  geom_segment(aes(xend = py, yend = py)) +
-  geom_point(aes(colour = var_label), size = 3) +
-  labs(x = 'from PUMS', y = 'from ACS tables')
-
-# looks like we're off for households without grandparents...
-
-# See this link (p. 88-89) for definitions:
-# https://www2.census.gov/programs-surveys/acs/tech_docs/subject_definitions/2023_ACSSubjectDefinitions.pdf
-# And this code:
-x.tab %>% 
-  distinct(CBSERIAL, PERNUM, .keep_all = TRUE) %>% 
-  filter(family.hous %in% 'family.hou' | lives.alone %in% 'not.liv.alone') %>% 
-  arrange(CBSERIAL, PERNUM) %>% 
-  select(CBSERIAL, PERNUM, FAMUNIT, FAMSIZE, SEX, AGE, MARST, GQ, family.hous)
-# figure out what is going on such that a lot of non-family households with
-# people living together are getting coded as family households (should be a few
-# thousand)
-
-x.tab %>% 
-  distinct(CBSERIAL, PERNUM, .keep_all = TRUE) %>% 
-  filter(family.hous %in% 'family.hou' | lives.alone %in% 'not.liv.alone') %>% 
-  arrange(CBSERIAL, PERNUM) %>% 
-  select(CBSERIAL, PERNUM, FAMUNIT, FAMSIZE, SEX, AGE, MARST, GQ, family.hous) %>%
-  group_by(CBSERIAL) %>%
-  filter(sum(FAMUNIT %in% 1) < 2)
-
-# okay there is one (ONE) issue here...
-# GQ for one PUMA (5102) being under-counted in the PUMS
-# I wonder if it has to do with the weird GQ == 5 place...
+# y.puma.totals = y.tab %>%
+#   group_by(tract) %>%
+#   mutate(cons.no = 1:n()) %>%
+#   group_by(puma, cons.no, form, var_label, vartype) %>% 
+#   summarise(e = sum(E))
+# 
+# x.totals = x.mat %>%
+#   mutate(across(-c(CBSERIAL, PERNUM, PERWT, PUMA), ~ PERWT * .)) %>%
+#   group_by(PUMA) %>%
+#   summarise(across(-c(CBSERIAL, PERNUM, PERWT), sum)) %>%
+#   ungroup()
+# 
+# x.totals
+# 
+# compare.totals = cbind(
+#   y.puma.totals %>% arrange(cons.no) %>% pivot_wider(names_from = puma, values_from = e, names_prefix = 'py.'),
+#   x.totals %>% pivot_longer(-PUMA, names_to = 'x.cons', values_to = 'val') %>% pivot_wider(names_from = PUMA, values_from = val, names_prefix = 'px.')
+# ) %>%
+#   pivot_longer(matches('^p[xy]'), names_to = 'pp', values_to = 'val') %>%
+#   separate_wider_delim(pp, names = c('source', 'puma'), delim = '.') %>%
+#   pivot_wider(names_from = source, values_from = val)
+# 
+# compare.totals %>%
+#   ggplot(aes(x = px, y = py, colour = vartype)) +
+#   geom_segment(aes(xend = py, yend = py)) +
+#   geom_point(size = 3) # +
+# # coord_fixed() +
+# # facet_wrap(~ vartype, scales = 'free')
+# # okay I'm not sure what's going on here...
+# 
+# compare.totals %>% 
+#   arrange(desc(abs(px - py) / (px + py)))
+# 
+# compare.totals %>%
+#   filter(vartype %in% 'is.fam.hou.type') %>%
+#   ggplot(aes(x = px, y = py, colour = var_label)) +
+#   annotate('segment', x = 1, y = 1, xend = 40000, yend = 40000, linetype = 2, colour = 'gray55') +
+#   geom_point(size = 3) +
+#   theme(legend.position = 'top')
+# 
+# compare.totals %>% 
+#   filter(grepl('hou', vartype)) %>% 
+#   ggplot(aes(x = px, y = py)) + 
+#   geom_segment(aes(xend = py, yend = py)) +
+#   geom_point(aes(colour = vartype), size = 3) +
+#   labs(x = 'from PUMS', y = 'from ACS tables')
+# 
+# # over-counting non-family households where the householder is living alone...
+# # maybe because GQs are being counted?
+# 
+# compare.totals %>% 
+#   filter(grepl('is.fam.hou.type', vartype)) %>% 
+#   ggplot(aes(x = px, y = py)) + 
+#   geom_segment(aes(xend = py, yend = py)) +
+#   geom_point(aes(colour = var_label), size = 3) +
+#   labs(x = 'from PUMS', y = 'from ACS tables')
+# # living alone counts still look like undercounts
+# 
+# compare.totals %>% 
+#   filter(grepl('is.fam.hou$', vartype)) %>% 
+#   ggplot(aes(x = px, y = py)) + 
+#   geom_segment(aes(xend = py, yend = py)) +
+#   geom_point(aes(colour = var_label), size = 3) +
+#   labs(x = 'from PUMS', y = 'from ACS tables')
+# # non-family households are being way over-counted
+# # family households are being way under-counted
+# 
+# compare.totals %>% 
+#   filter(grepl('is.grandp', vartype)) %>% 
+#   ggplot(aes(x = px, y = py)) + 
+#   geom_segment(aes(xend = py, yend = py)) +
+#   geom_point(aes(colour = var_label), size = 3) +
+#   labs(x = 'from PUMS', y = 'from ACS tables')
+# 
+# # looks like we're off for households without grandparents...
+# 
+# # See this link (p. 88-89) for definitions:
+# # https://www2.census.gov/programs-surveys/acs/tech_docs/subject_definitions/2023_ACSSubjectDefinitions.pdf
+# # And this code:
+# x.tab %>% 
+#   distinct(CBSERIAL, PERNUM, .keep_all = TRUE) %>% 
+#   filter(family.hous %in% 'family.hou' | lives.alone %in% 'not.liv.alone') %>% 
+#   arrange(CBSERIAL, PERNUM) %>% 
+#   select(CBSERIAL, PERNUM, FAMUNIT, FAMSIZE, SEX, AGE, MARST, GQ, family.hous)
+# # figure out what is going on such that a lot of non-family households with
+# # people living together are getting coded as family households (should be a few
+# # thousand)
+# 
+# x.tab %>% 
+#   distinct(CBSERIAL, PERNUM, .keep_all = TRUE) %>% 
+#   filter(family.hous %in% 'family.hou' | lives.alone %in% 'not.liv.alone') %>% 
+#   arrange(CBSERIAL, PERNUM) %>% 
+#   select(CBSERIAL, PERNUM, FAMUNIT, FAMSIZE, SEX, AGE, MARST, GQ, family.hous) %>%
+#   group_by(CBSERIAL) %>%
+#   filter(sum(FAMUNIT %in% 1) < 2)
+# 
+# # okay there is one (ONE) issue here...
+# # GQ for one PUMA (5102) being under-counted in the PUMS
+# # I wonder if it has to do with the weird GQ == 5 place...
 
 
 # ==============================================================
