@@ -87,8 +87,8 @@ pums.out = pums.out %>%
     
     ##### == LATIN GROUPS == #####
     ### - Afro-Latino
-    # Identifies as Black and Latino or identifying with a Latin American ancestry (200-295)
-    LatAfr = (RACBLK > 1) & (HISPAN > 0 | ANCESTR1 %in% c(200:295, 360:370) | ANCESTR1 %in% c(200:295, 360:370)),
+    # Identifies as Black and Latino or identifying with a Latin American (Spain, Mexican, Cent. Am., South. Am., Brazil, PR, Cuba, DR) ancestry (200-295, 360-65)
+    LatAfr = (RACBLK > 1) & (HISPAN > 0 | ANCESTR1 %in% c(200:295, 360:365) | ANCESTR1 %in% c(200:295, 360:365)),
     ### = Hispanic (Central American)
     LatCen =  (HISPAN > 0 | RACOTHER > 1) & (
       # Ancestry includes Costa Rican (221), Honduran (223), Nicaraguan (224), Panamanian (225), Belize (302)
@@ -120,7 +120,7 @@ pums.out = pums.out %>%
     LatDom = (HISPAN > 0 | RACOTHER > 1) & (
       # Ancestry includes Dominican (275) or detailed Hispanic flag specifies Dominican (460)
       ANCESTR1 %in% 275 | ANCESTR2 %in% 275 | HISPAND %in% 460 |
-        # or, lists detailed birthplace as Cuba (26010) AND has "other" detailed Hispanic ID (498) 
+        # or, lists detailed birthplace as DR (26010) AND has "other" detailed Hispanic ID (498) 
         # and ancestry Latin American (227), Hispanic (290), Uncoded (996) or not given (999)
         (
           BPLD %in% 26010 & HISPAND %in% 498 & 
@@ -225,14 +225,17 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 913:914 | ANCESTR2 %in% 913:914 |
         # or detailed race specifying a Latin American tribe
         # Central/Spanish American Indian (329-30), Aztec (340), Inca (341), Maya (342),
-        # Mixtec (343), 
+        # Mixtec (343), Taino (344), Tarasco (345), South/Mex/ American Indian (359, 360), All other Lat. Am. Indian alone (364)
         RACED %in% c(329:345, 351, 354, 359:360, 364) |
         # or specifying speaking an Latin American indigenous language (e.g., 89: Aztec)
-        LANGUAGE %in% c(88:89, 92)
+        LANGUAGE %in% c(88:89, 92) |
+        # or, listing "tribe not specified" or "other specified Amer. Indian tribe" or listing 'AIAN' as one of many races
+        # and listing birth place elsewhere in Americas
+        ((RACED %in% c(361, 399) | grepl('AIAN', raced.char)) & BPL %in% 110:300)
     ),
     ### - American Indian
-    # Not born elsewhere in the Americas (or India) AND not Latin or Alaska Native AND
-    AIANInd = (RACAMIND > 1) & !(BPL %in% c(110:300, 521)) & !(AIANLat | AIANAlask) & (
+    # Not born elsewhere in India AND not Latin or Alaska Native AND
+    AIANInd = (RACAMIND > 1) & !(BPL %in% 521) & !(AIANLat | AIANAlask) & (
       # Ancestry listed as American Indian
       ((ANCESTR1 %in% 920 | ANCESTR2 %in% 920)) | 
         # or, specific lower 48 tribe listed as detailed race
@@ -249,8 +252,8 @@ pums.out = pums.out %>%
         # Other Hokan (80), Siouan langs. (81), Muskogean (82), Keres (83), Caddoan (85), Shoshonean/Hopi (86), 
         # Pima/Papago (87), Tanoan (90), American Indian n.s. (93)
         LANGUAGE %in% c(70, 72:83, 85:87, 90, 93) |
-        # or, multiple races listed, including American Indian (AIAN) or tribe
-        (RACED > 800 & (grepl('AIAN', raced.char) | grepl('[Aa]merican\\s[Ii]ndian', raced.char)))
+        # or, multiple races listed, including American Indian (AIAN) or tribe and not born in Latin America or India
+        (RACED > 800 & (grepl('AIAN', raced.char) | grepl('[Aa]merican\\s[Ii]ndian', raced.char)) & !(BPL %in% c(110:300, 521)))
     ),
 
         
@@ -277,15 +280,16 @@ pums.out = pums.out %>%
       # West Indian (335), Other West Indian (337). Guyanese (370)
       # NOT including Haiti, Jamaica,
       ANCESTR1 %in% c(261, 261, 275, 300:304, 310:335, 337, 370) | ANCESTR2 %in% c(261, 261, 275, 300:304, 310:335, 337, 370) |
-        # or, birth place (detailed) is Puerto Rico (11110) USVI (11500), Bermuda (16010), Belize (21010), 
-        # Dominican Republic (26010) West Indies sans. Haiti, Jamaica (remaining: 26040 - 26094)
-        BPLD %in% c(11110:11500, 16010, 26010, 26040:26094)
+        # or, birth place (detailed) is Puerto Rico (11000) USVI (11500), Bermuda (16010), Belize (21010), Cuba (25000),
+        # West Indies (26000), Dominican Rep. (26010) West Indies sans. Haiti, Jamaica (remaining: 26040 - 26094), Guyana (30040)
+        BPLD %in% c(11000:11500, 16010, 21010, 25000, 26000:26010, 26040:26094, 30040)
     ),
     ### - Ethiopian
-    # Ancestry includes Ethiopian (522) or Eritrean (523) or born in Ethiopia (60044) and speaks Amharic/Ethiopian language 60
-    AfrEthiopian = RACBLK > 1 & (ANCESTR1 %in% 522:523 | ANCESTR2 %in% 522:523 | (BPLD %in% 60004 & LANGUAGE %in% 60)),
+    # Ancestry includes Ethiopian (522) or Eritrean (523) or born in Ethiopia (60044) or Eritrea (60065) or speaks Amharic/Ethiopian language 60
+    AfrEthiopian = RACBLK > 1 & (ANCESTR1 %in% 522:523 | ANCESTR2 %in% 522:523 | BPLD %in% c(60044, 60065) | LANGUAGE %in% 60),
     ### - Haitian
-    # IDs as Black and has Haitian ancestry (336) or was born in Haiti (26020) # NOTE: missing Creole flag (no distinct Haitian Creole in IPUMS)
+    # IDs as Black and has Haitian ancestry (336) or was born in Haiti (26020) 
+    # NOTE: missing Creole flag (no distinct Haitian Creole in IPUMS - lumped with French Creole)
     AfrHaitian = RACBLK > 1 & (ANCESTR1 %in% 336 | ANCESTR2 %in% 336 | BPLD %in% 26020),
     ### - Jamaican
     # IDs as Black and has Jamaican ancestry (308) or was born in Jamaica (26030) or speaks Jamaican Creole (110)
@@ -312,7 +316,7 @@ pums.out = pums.out %>%
     AsnInd = (RACASIAN > 1 | RACE %in% 7 | (RACAMIND > 1 & BPLD %in% 52100)) & (
       # Ancestry includes
       # Asian Indian (615), Bengali (603), East Indies (675), Punjabi (650), 
-      # Karnatakan (region of Kannada speakers; 632), Assamese (626), Gujarati (630),
+      # Karnatakan (region of Kannada speakers; 632), Assamese (626), Gujarati (630)
       ANCESTR1 %in% c(615, 603, 675, 650, 632, 626, 630) |
         ANCESTR2 %in% c(615, 603, 675, 650, 632, 626, 630) |
         # # or, born in India (52100) and speaks Hindi (3100-3102), Urdu (3103), Other Indo-Iranian (3104),
@@ -323,7 +327,7 @@ pums.out = pums.out %>%
         # or, detailed race IDed as Asian Indian (610), Sikh (657), Asian Indian + asian write-in (678),
         # white + asian indian (814), black + asian indian (835), AIAN and asian indian (852),
         # asian indian and PI write-in (866), asian indian + other write-in (884), 
-        RACED %in% c(610, 657, 678, 814, 835, 852, 866) 
+        RACED %in% c(610, 657, 678, 814, 835, 852, 866, 884) 
     ),
     ### = Cambodian
     # Identifies as Asian AND
@@ -402,7 +406,7 @@ pums.out = pums.out %>%
         RACED %in% c(500, 673, 677, 812, 833, 863, 869, 882, 913, 926, 964) |
         # Or, born in Japan (501) and have no other reported ancestry
         (
-          BPL %in% 512 & ANCESTR1 %in% 999 &
+          BPL %in% 501 & ANCESTR1 %in% 999 &
             (grepl('[Oo]ther\\s[Aa]sian', raced.char) | grepl('[Aa]sian\\swrite', raced.char))
         ) 
     ),
@@ -430,7 +434,7 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 680 | ANCESTR2 %in% 680 | RACED %in% 669 | (BPLD %in% 52140 & LANGUAGED %in% 3103)
     ),
     ### - South Asian
-    # Identifies as Asian and not born in Indian and:
+    # Identifies as Asian and not born in India and:
     AsnSouth = (RACASIAN > 1 | RACE %in% 7) & !(BPLD %in% 52100) & (
       # Nepali (609), Maldivan (695), Bhutanese (607), Sri Lankan (690),
       # Tibetan (714), Tamil (656), Singhalese (691), Shan (702)
@@ -453,16 +457,15 @@ pums.out = pums.out %>%
     AsnTaiwanese = (RACASIAN > 1 | RACE %in% 7) & (
       # has Taiwanese ancestry (782) or Taiwanese (410) listed as detailed race
       ANCESTR1 %in% 782 | ANCESTR2 %in% 782 | RACED %in% 410 |
-        # or, was born in Taiwan and speaks Chinese (43) (or English, 1) 
+        # or, was born in Taiwan (50040) and speaks Chinese (43) (or English, 1) 
         (BPLD %in% 50040 & LANGUAGE %in% c(1, 43))
     ),
     ### - Thai
     # Identifies as Asian and
     AsnThai = (RACASIAN > 1 | RACE %in% 7) & (
-      # Ancestry includes Thai (776) or detailed race is Thai (663)
-      ANCESTR1 %in% 776 | ANCESTR2 %in% 776 | RACED %in% 663 |
-        # or, born in Thailand or speaks Thai
-        BPL %in% 517 | LANGUAGED %in% 4710
+      # Ancestry includes Thai (776) or detailed race is Thai (663)       
+      # or, born in Thailand or speaks Thai
+      ANCESTR1 %in% 776 | ANCESTR2 %in% 776 | RACED %in% 663 | BPL %in% 517 | LANGUAGED %in% 4710
     ),
     ### - Vietnamese
     # Asian and
@@ -487,7 +490,7 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 821:822 | ANCESTR2 %in% 821:822 | 
         # or born in Guam (10500) or N. Mariana Islands (71047) or speaks Chamorro (5503)
         # or detailed race is Chamorro (685), Guamanian (691), or white+chamorro (823)
-        (BPLD %in% c(10500, 71047) | LANGUAGED %in% 5503) | (RACED %in% c(685, 691, 823))
+        BPLD %in% c(10500, 71047) | LANGUAGED %in% 5503 | RACED %in% c(685, 691, 823)
     ),
     ### - COFA (Confederated States of Micronesia)
     # IDs as Pacific Islander, and
@@ -496,8 +499,8 @@ pums.out = pums.out %>%
       # Chuukese (828), Yap Islander (829)
       ANCESTR1 %in% c(820, 824, 826:829) | ANCESTR2 %in% c(820, 824, 826:829) |
         # or, detailed race listed as Palau (687), Other Micronesian (688), Chuukese (690)
-        # or born in Micronesia and speaks Trukese (5511) or other Malayan Language (5300)
-        RACED %in% c(687:688, 690) | BPLD %in% 71042 | LANGUAGED %in% c(5300, 5511)
+        # or born in Micronesia or speaks Trukese (5511)
+        RACED %in% c(687:688, 690) | BPLD %in% 71042 | LANGUAGED %in% 5511
     ),
     ### - Fijian
     # IDs as Pacific Islander, and
@@ -516,15 +519,14 @@ pums.out = pums.out %>%
         # or detailed race string includes Hawaiian
         RACED %in% c(630, 821, 861:864, 911:914, 926:927, 936, 964) |
         # or speaks Hawaiian
-        LANGUAGED %in% 56
+        LANGUAGE %in% 56
     ),
     ### - Marshallese
     # IDs as Pacific Islander and
     NHPIMarshall = (RACPACIS > 1 | RACE %in% 7) & (
-      # Ancestry or detailed race inclues Marshallese (ancestr 825, raced 692)
-      ANCESTR1 %in% 825 | ANCESTR2 %in% 825 | RACED %in% 692 |
-        # or, born in Marshall Islands and speaks Marshallese language
-        (BPLD %in% 71041 | LANGUAGED %in% 5506)
+      # Ancestry or detailed race includes Marshallese (ancestr 825, raced 692)
+      # or, born in Marshall Islands or speaks Marshallese language
+      ANCESTR1 %in% 825 | ANCESTR2 %in% 825 | RACED %in% 692 | BPLD %in% 71041 | LANGUAGED %in% 5506
     ),
     ### - Samoan
     # NOTE: estimate currently under-estimating (maybe because of RACEPACIS flag)
@@ -548,15 +550,18 @@ pums.out = pums.out %>%
     
     ##### == MIDDLE EASTERN GROUPS == #####
     ### - Egyptian
-    # Ancestry is Egyptian (402) or race is Middle Eastern (490) or Arab (495:496) and born in Egypt (60012)
-    MENAEgypt = (ANCESTR1 %in% 402 | ANCESTR2 %in% 402 | (RACED %in% 490:496 & BPLD %in% 60012)),
+    # Ancestry is Egyptian (402) or ancestry is Middle Eastern (490) or Arab (495:496) and born in Egypt (60012)
+    MENAEgypt = (
+      ANCESTR1 %in% 402 | ANCESTR2 %in% 402 | 
+        ((ANCESTR1 %in% 490:496 | ANCESTR2 %in% 490:496) & BPLD %in% 60012)
+    ),
     ### - Iraqi
     MENAIraq = (
       # Ancestry includes Iraqi 
       ANCESTR1 %in% 417 | ANCESTR2 %in% 417 | 
-        # or detailed race is Middle Eastern (490), Arab (495:496) or ancestry is Assyrian (482) or Kurdish (442)
-        # and born in Iraq
-        ((ANCESTR1 %in% c(442, 482) | ANCESTR2 %in% c(442, 482) | RACED %in% 490:496) & BPL %in% 532)
+        # ancestry is Assyrian (482), Kurdish (442), Middle Eastern (490), Arab (495:496)
+        # and born in Iraq (532)
+        ((ANCESTR1 %in% c(442, 482, 490:496) | ANCESTR2 %in% c(442, 482, 490:496)) & BPL %in% 532)
     ),
     ### - Iranian
     # Has Iranian ancestry or was born in Iran (416) and speaks Farsi/other Persian (29)
@@ -566,37 +571,43 @@ pums.out = pums.out %>%
     MENAIsr = (ANCESTR1 %in% 419 | ANCESTR2 %in% 419 | (BPL %in% 534 & LANGUAGE %in% c(3, 59))),
     ### - Lebanese
     # Has Lebanese ancestry (425) 
-    # or born in Lebanon and either speaks Arabic (57) or has MidEast (490) or Arab (495-496) as detailed race
-    MENALeban = (ANCESTR1 %in% 425 | ANCESTR2 %in% 425 | (BPL %in% 537 & (LANGUAGE %in% 57:58 | RACED %in% 490:496))),
+    # or born in Lebanon and either speaks Arabic (57) or has MidEast (490) or Arab (495-496) ancestry
+    MENALeban = (
+      ANCESTR1 %in% 425 | ANCESTR2 %in% 425 | 
+        (BPL %in% 537 & (LANGUAGE %in% 57:58 | ANCESTR1 %in% 490:496 | ANCESTR2 %in% 490:496))
+    ),
     ### - Palestinian
     # Has Palestinian ancestry (465) 
-    # or was born in Palestine/(I) and either speaks Arabic (57) or has Mid East(490) or Arab (495-6) for detailed race
-    MENAPalest = (ANCESTR1 %in% 465 | ANCESTR2 %in% 465 | (BPL %in% 534 & (LANGUAGE %in% 57:58 | RACED %in% 490:496))),
+    # or was born in Palestine/(I) and either speaks Arabic (57-58) or has Mid East(490) or Arab (495-6) ancestry
+    MENAPalest = (
+      ANCESTR1 %in% 465 | ANCESTR2 %in% 465 | 
+        (BPL %in% 534 & (LANGUAGE %in% 57:58 | ANCESTR1 %in% 490:496 | ANCESTR2 %in% 490:496))
+    ),
     ### - Syrian
     MENASyr = (
       # Has Syrian ancestry (429)
       ANCESTR1 %in% 429 | ANCESTR2 %in% 429 | 
-        # or was born in Syria (541) and has MidEast (490) or Arab (495-6) race or Assyrian (482) or Kurdish (442) ancestry
-        ((ANCESTR1 %in% c(442, 482) | ANCESTR2 %in% c(442, 482) | RACED %in% 490:496) & BPL %in% 532)
+        # or was born in Syria (541) and has MidEast (490), Arab (495-6), Assyrian (482) or Kurdish (442) ancestry
+        ((ANCESTR1 %in% c(442, 482, 490:496) | ANCESTR2 %in% c(442, 482, 490:496)) & BPL %in% 541)
     ),
     ### - Turkish
     # Has Turkish ancestry (434) or was born and speaks Turkish (36)
     # (Turkish language flag may be too generous alone, but it gets us to the ACS counts)
-    MENATurkish = (ANCESTR1 %in% 434 | ANCESTR2 %in% 434 | LANGUAGED %in% 36),
+    MENATurkish = (ANCESTR1 %in% 434 | ANCESTR2 %in% 434 | LANGUAGE %in% 36),
     ### - MENA Other
     MENAOther = (
-      # Ancestry includes Algerian (400), Libyan (404), Moroccan (406), North African (411), Jordanian (421), Kuwaiti (423),
-      # Saudi Arabian (427), Yemeni (435), Omani (436), Qatari (439), Kurdish (442), 
+      # Ancestry includes Algerian (400), Libyan (404), Moroccan (406), Tunisian (408), North African (411), Jordanian (421),
+      # Kuwaiti (423), Saudi Arabian (427), Yemeni (435), Omani (436), Qatari (439), Kurdish (442),
       # Emirati (480), Syriac/Chaldean (482), Middle Eastern (490), Arab (485), Other Arab (496),
       ANCESTR1 %in% c(400, 404:411, 421:423, 427, 435:442, 470:496) |
         ANCESTR2 %in% c(400, 404:411, 421:423, 427, 435:442, 470:496) |
-        # or, speaks Arabic (57-58) or Farsi (29-30) AND was born in Algeria (60010), Libya (60013), Morocco (60014),
+        # or, speaks Arabic (57-58) or Farsi (29-30) AND was born in Algeria (60011), Libya (60013), Morocco (60014),
         # Tunisia (60016), Western Sahara (60019), Bahrain (530), Cypress (531),
         # Jordan (535), Kuwait (536), Oman (538), Qatar (539), Saudi Arabia (540),
         # UAE (543), Yemen (544-545), Persian Gulf States n.s. (546), Middle East n.s. (547),
         # Southwest Asia n.s.. (548), Asia Minor n.s. (549), South Asia nec (550)
         (
-          (BPL %in% c(530:531, 535:536, 538:540, 543:550) | BPLD %in% c(60010, 60013:60014, 60016, 60019)) &
+          (BPL %in% c(530:531, 535:536, 538:540, 543:550) | BPLD %in% c(60011, 60013:60014, 60016, 60019)) &
             LANGUAGE %in% c(29:30, 57:58)
         )
     ),
@@ -609,8 +620,8 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 22 | ANCESTR2 %in% 22 |
       # or has British Isles (11-12) ancestry without specifying Welsh (97) or Scotish (88) or Scots Irish (87)
         (ANCESTR1 %in% 11:12 | ANCESTR2 %in% 11:12 & !(ANCESTR1 %in% c(87:88, 97) | ANCESTR2 %in% c(87:88, 97))) |
-        # or speaks English and was born in England
-        (BPL %in% 410 & LANGUAGE %in% 1)
+        # or speaks English and was born in England (410) and ancestry is non-descript Euro or not given
+        (BPL %in% 410 & LANGUAGE %in% 1 & ANCESTR1 %in% c(183, 187, 195, 996, 999))
     ),
     ### - German
     # White and ancestry includes German (32) or Prussian (40) or was born in Germany (453) and speaks German (2)
@@ -621,25 +632,26 @@ pums.out = pums.out %>%
     # White and 
     WhtIre = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
       # ancestry includes Irish (50) or born in Ireland (414) with no reported Ancestry (996-999) and speaks English/Celtic (1, 15)
-      ANCESTR1 %in% 50 | ANCESTR2 %in% 50 | (BPL %in% 453 & LANGUAGE %in% c(1, 15) & ANCESTR1 %in% c(996, 999))
+      ANCESTR1 %in% 50 | ANCESTR2 %in% 50 | (BPL %in% 414 & LANGUAGE %in% c(1, 15) & ANCESTR1 %in% c(183, 187, 996, 999))
     ),
     ### - Italian
-    # White, and ancestry includes Italian (51) or Sicilian (68) or born in Italy and missing ancestry (999)
+    # White, and ancestry includes Italian (51) or Sicilian (68) or born in Italy (434) and missing ancestry (999)
     WhtItal = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
-      ANCESTR1 %in% c(51, 68) | ANCESTR2 %in% c(51, 68) | (BPL %in% 434 & ANCESTR1 %in% c(996, 999))
+      ANCESTR1 %in% c(51, 68) | ANCESTR2 %in% c(51, 68) | (BPL %in% 434 & ANCESTR1 %in% c(185, 996, 999))
     ),
     ### - Polish
-    # White, and ancestry includes Polish (142) or born in Poland (454) and ancestry is nec European (190, 195) or NA (996-9)
+    # White, and ancestry includes Polish (142), 
+    # speaks Polish (21) or born in Poland (455) and ancestry is nec European (190, 195) or NA (996-9)
     WhtPol = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
-      ANCESTR1 %in% 142 | ANCESTR2 %in% 142 | (BPL %in% 454 & ANCESTR1 %in% c(190, 194, 996, 999))
+      ANCESTR1 %in% 142 | ANCESTR2 %in% 142 | ((BPL %in% 455 | LANGUAGE %in% 21)  & ANCESTR1 %in% c(190, 195, 996, 999))
     ),
     ### - Romanian
     # White, and 
     WhtRom = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
       # ancestry includes Rom (124) or Romanian (142)
       ANCESTR1 %in% c(124, 144) | ANCESTR2 %in% c(124, 144) | 
-        # or born in Romania (456) and no ancestry (999) or speaks Rumanian (14)
-        (BPL %in% 456 & (ANCESTR1 %in% c(996, 999) | LANGUAGE %in% 14))
+        # or born in Romania (456) or speaks Rumanian (14) and Eastern/nondescript European or no ancestry (999)
+        ((BPL %in% 456 | LANGUAGE %in% 14) & (ANCESTR1 %in% c(190, 195, 996, 999)))
       ),
     ### - Russian
     # White, and
@@ -648,15 +660,15 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 148 | ANCESTR2 %in% 148 | 
         # or includes Cossack ancestry (108) and speak Russian (18)
         ((ANCESTR1 %in% 108 | ANCESTR2 %in% 108) & LANGUAGE %in% 18) |
-        # or born in Russia/former USSR (465) and speak Russian (18) and no ancestry reported (996-9)
-        (BPL %in% 465 & LANGUAGE %in% 18 & ANCESTR1 %in% c(996, 999))
+        # or born in Russia/former USSR (465) and speak Russian (18) and nondescript Euro or no ancestry reported (996-9)
+        (BPL %in% 465 & LANGUAGE %in% 18 & ANCESTR1 %in% c(190, 195, 996, 999))
     ),
     ### - Scottish
     # White, and
     WhtSco = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
       # Ancestry includes Scottish (88) and Scots-Irish (87), 
       # or born in Scotland and having Euro nec (183, 195) or un-reported (996, 999) ancestry and speaking English
-      ANCESTR1 %in% 87:88 | ANCESTR2 %in% 87:88 | (BPL %in% 411 & LANGUAGE %in% 1 & ANCESTR1 %in% c(190, 195, 996:999))
+      ANCESTR1 %in% 87:88 | ANCESTR2 %in% 87:88 | (BPL %in% 411 & LANGUAGE %in% 1 & ANCESTR1 %in% c(183, 187, 195, 996:999))
     ),
     ### - Ukrainian
     # White, and
@@ -665,21 +677,21 @@ pums.out = pums.out %>%
       ANCESTR1 %in% 171 | ANCESTR2 %in% 171 | 
         # or includes Cossack ancestry (108) and speak Ukrainian (19)
         ((ANCESTR1 %in% 108 | ANCESTR2 %in% 108) & LANGUAGE %in% 19) |
-        # or born in Russia/former USSR (465) and speak Ukrainian (19) and no ancestry reported (996-9)
-        (BPL %in% 465 & LANGUAGE %in% 19 & ANCESTR1 %in% c(996, 999))
+        # or born in Russia/former USSR (465) and speak Ukrainian (19) and nondescript Euro or no ancestry reported (996-9)
+        (BPL %in% 465 & LANGUAGE %in% 19 & ANCESTR1 %in% c(190, 195, 996, 999))
     ),
     ### - Slavic
     # White, and
     WhtSlav = (RACWHT > 1 | (ANCESTR1 < 210 & (ANCESTR2 < 210 | ANCESTR2 %in% 999) & RACE %in% 7)) & (
-        # Ancestry includes Bulgarian (103), Belorussian (102), Czech (111), Croatian (109),
+        # Ancestry includes Bulgarian (103), Belorussian (102), Czech (111), Croatian (109), Bohemian (112),
         # Serbian (152), Macedonian (130), Slovakian (153), Slovenian (154), Yugoslavian (176), 
         # Slav (178), Bohemian (112)
         ANCESTR1 %in% c(102:103, 109:112, 130, 152:154, 172:178) |
           ANCESTR2 %in% c(102:103, 109:112, 130, 152:154, 172:178) |
-          # Czech (20), Slovak (22), Serbo-Croat/Slavonian/Yugoslavian (23)
-          LANGUAGE %in% c(20, 22:23) |
-          # or, born in Bulgaria (451), Czechoslovakia (452), Yugoslavia (457) and un-listed ancestry
-          (BPL %in% c(451:452, 457) & ANCESTR1 %in% 996:999)
+          # Czech (20), Slovak (22), Serbo-Croat/Slavonian/Yugoslavian (23), Slovene (24)
+          LANGUAGE %in% c(20, 22:24) |
+          # or, born in Bulgaria (451), Czechoslovakia (452), Yugoslavia (457) and un-listed or non-descript ancestry
+          (BPL %in% c(451:452, 457) & ANCESTR1 %in% c(181, 190, 195, 996:999))
     ),
     ### - White, other
     # IDs as white or has *both* ancestries from Europe, non-Hispanic, other
@@ -856,7 +868,7 @@ counts.combined
 
 write.csv(
   counts.combined,
-  file = 'oregon_oha/reclassified_RE_counts_2025-08-29_for_OHA.csv',
+  file = 'oregon_oha/reclassified_RE_counts_2025-09-12_for_OHA.csv',
   row.names = FALSE, na = ''
 )
 
@@ -917,17 +929,6 @@ combined.grp.totals
 
 write.csv(
   combined.grp.totals,
-  file = 'oregon_oha/reclassified_RE_grp_counts_2025-08-29_for_OHA.csv',
+  file = 'oregon_oha/reclassified_RE_grp_counts_2025-09-12_for_OHA.csv',
   row.names = FALSE, na = ''
 )
-
-# - b02008 white 3686293	6602 vs. our estimate 3684004
-# - b02009 black 137857	  1770 vs. our estimate 136865
-# - b02010 amind 152808	  3244 vs. our estimate 144184
-# - b02011 asian 280041	  1609 vs. our estimate 282025
-# - b02012 pacis 38165	  1544 vs. our estimate 37837
-# - b03003 latin 605467        vs. our estimate 608214
-
-# also below counts on
-# japanese, filipino, cambodian
-# 
