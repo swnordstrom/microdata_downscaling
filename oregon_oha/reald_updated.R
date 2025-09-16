@@ -262,11 +262,7 @@ pums.out = pums.out %>%
     # Identifies as Black AND
     AfrAm = (RACBLK > 1) & (
       # has "Afro-American" or "African American" ancestry, or is born in the 50 states + Guam + Samoa
-      (ANCESTR1 %in% c(900:902, 940) | ANCESTR2 %in% c(900:902, 940) | BPL < 110) &
-        # or was not born in Caribbean, Latin America, African
-        # Birth places: Puerto Rico (110), C. America (210), Cuba (250), West Indies (260), 
-        # South America (300), elsewhere in Americas (299), Africa (600)
-        !(BPL %in% c(110, 210, 250, 260, 299, 300, 600))
+      (ANCESTR1 %in% c(900:902, 940) | ANCESTR2 %in% c(900:902, 940) | BPL < 110)
     ),
     ### - Afro-Caribbean
     # IDs as Black AND
@@ -868,7 +864,7 @@ counts.combined
 
 write.csv(
   counts.combined,
-  file = 'oregon_oha/reclassified_RE_counts_2025-09-12_for_OHA.csv',
+  file = 'oregon_oha/reclassified_RE_counts_2025-09-16_for_OHA.csv',
   row.names = FALSE, na = ''
 )
 
@@ -929,6 +925,6 @@ combined.grp.totals
 
 write.csv(
   combined.grp.totals,
-  file = 'oregon_oha/reclassified_RE_grp_counts_2025-09-12_for_OHA.csv',
+  file = 'oregon_oha/reclassified_RE_grp_counts_2025-09-16_for_OHA.csv',
   row.names = FALSE, na = ''
 )
