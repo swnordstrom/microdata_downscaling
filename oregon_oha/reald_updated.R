@@ -829,102 +829,107 @@ for (i in 1:length(re.grp.totals)) {
   
 }
 
-primary.counts = pums.rarest %>% 
-  # Get a person count for each *primary* group
-  group_by(re = primary) %>% 
-  summarise(n.primary = sum(PERWT)) %>%
-  mutate(re = ifelse(re %in% 'unassigned', 'OtherUnspec', re))
-
-re.aoic.counts = pums.out %>% 
-  # Merge to get the Jewish groupings
-  merge(pums.jet, all = TRUE) %>%
-  # Fill in any missing Jewish assignments as FALSE
-  mutate(across(starts_with('J'), ~ ifelse(is.na(.), FALSE, .))) %>%
-  # Get a person count for each group *alone or in combination*
-  select(PERWT, where(is.logical)) %>%
-  mutate(across(where(is.logical), ~ PERWT * as.numeric(.))) %>%
-  # Remove PERWT (total) column
-  select(-PERWT) %>%
-  apply(2, sum) %>%
-  data.frame(
-    re = names(.),
-    n.aoic = .
-  )
-
-counts.combined = merge(primary.counts, re.aoic.counts, all = TRUE) %>%
-  mutate(across(where(is.numeric), ~ ifelse(is.na(.), 0, .)))
-
-counts.combined %>% 
-  mutate(primary.aoic.ratio = n.primary / n.aoic) %>%
-  arrange(primary.aoic.ratio) %>%
-  mutate(primary.aoic.ratio = round(primary.aoic.ratio, 2))
-
-
-counts.combined
+# primary.counts = pums.rarest %>% 
+#   # Get a person count for each *primary* group
+#   group_by(re = primary) %>% 
+#   summarise(n.primary = sum(PERWT)) %>%
+#   mutate(re = ifelse(re %in% 'unassigned', 'OtherUnspec', re))
+# 
+# re.aoic.counts = pums.out %>% 
+#   # Merge to get the Jewish groupings
+#   merge(pums.jet, all = TRUE) %>%
+#   # Fill in any missing Jewish assignments as FALSE
+#   mutate(across(starts_with('J'), ~ ifelse(is.na(.), FALSE, .))) %>%
+#   # Get a person count for each group *alone or in combination*
+#   select(PERWT, where(is.logical)) %>%
+#   mutate(across(where(is.logical), ~ PERWT * as.numeric(.))) %>%
+#   # Remove PERWT (total) column
+#   select(-PERWT) %>%
+#   apply(2, sum) %>%
+#   data.frame(
+#     re = names(.),
+#     n.aoic = .
+#   )
+# 
+# counts.combined = merge(primary.counts, re.aoic.counts, all = TRUE) %>%
+#   mutate(across(where(is.numeric), ~ ifelse(is.na(.), 0, .)))
+# 
+# counts.combined %>% 
+#   mutate(primary.aoic.ratio = n.primary / n.aoic) %>%
+#   arrange(primary.aoic.ratio) %>%
+#   mutate(primary.aoic.ratio = round(primary.aoic.ratio, 2))
+# 
+# 
+# counts.combined
+# 
+# write.csv(
+#   counts.combined,
+#   file = 'oregon_oha/reclassified_RE_counts_2025-09-16_for_OHA.csv',
+#   row.names = FALSE, na = ''
+# )
+# 
+# ### = Get group totals
+# 
+# # AOIC totals (from the full, all AOIC PUMS merged with Jewish imputes)
+# aoic.re.grp.totals = pums.out %>% 
+#   # Merge to get the Jewish groupings
+#   merge(pums.jet, all = TRUE) %>%
+#   # Fill in any missing Jewish assignments as FALSE
+#   mutate(across(starts_with('J'), ~ ifelse(is.na(.), FALSE, .))) %>%
+#   mutate(
+#     nhpi = if_any(starts_with('NHPI')),
+#     asn  = if_any(starts_with('Asn')),
+#     aian = if_any(starts_with('AIAN')),
+#     wht  = if_any(starts_with('Wht')),
+#     afr  = if_any(starts_with('Afr')),
+#     lat  = if_any(starts_with('Lat')),
+#     mena = if_any(starts_with('MENA')),
+#     j    = if_any(starts_with('J')),
+#     oth  = if_any(starts_with('Oth'))
+#   ) %>%
+#   select(PERWT, nhpi, asn, aian, wht, afr, lat, mena, j, oth) %>%
+#   # Get sums (number of people) identifying as each group
+#   mutate(across(where(is.logical), ~ PERWT * .)) %>%
+#   # Remove person weight colum (population total) because it isn't needed
+#   select(-PERWT) %>%
+#   apply(2, sum) %>%
+#   # Convert to data frame
+#   data.frame(
+#     grp = names(.),
+#     n.aoic = .
+#   )
+# 
+# # Get primary totals
+# prim.re.grp.totals = primary.counts %>%
+#   # Condense into groups
+#   mutate(
+#     grp = case_when(
+#       grepl('^NHPI', re) ~ 'nhpi',
+#       grepl('^Asn',  re) ~ 'asn',
+#       grepl('^AIAN', re) ~ 'aian',
+#       grepl('^Wht',  re) ~ 'wht',
+#       grepl('^Afr',  re) ~ 'afr',
+#       grepl('^Lat',  re) ~ 'lat',
+#       grepl('^MENA', re) ~ 'mena',
+#       grepl('^J',    re) ~ 'j',
+#       grepl('^Oth',  re) ~ 'oth'
+#     )
+#   ) %>%
+#   group_by(grp) %>% 
+#   summarise(n.primary = sum(n.primary)) %>%
+#   ungroup()
+# 
+# combined.grp.totals = merge( prim.re.grp.totals, aoic.re.grp.totals, all = TRUE)
+# 
+# combined.grp.totals
+# 
+# write.csv(
+#   combined.grp.totals,
+#   file = 'oregon_oha/reclassified_RE_grp_counts_2025-09-16_for_OHA.csv',
+#   row.names = FALSE, na = ''
+# )
 
 write.csv(
-  counts.combined,
-  file = 'oregon_oha/reclassified_RE_counts_2025-09-16_for_OHA.csv',
-  row.names = FALSE, na = ''
-)
-
-### = Get group totals
-
-# AOIC totals (from the full, all AOIC PUMS merged with Jewish imputes)
-aoic.re.grp.totals = pums.out %>% 
-  # Merge to get the Jewish groupings
-  merge(pums.jet, all = TRUE) %>%
-  # Fill in any missing Jewish assignments as FALSE
-  mutate(across(starts_with('J'), ~ ifelse(is.na(.), FALSE, .))) %>%
-  mutate(
-    nhpi = if_any(starts_with('NHPI')),
-    asn  = if_any(starts_with('Asn')),
-    aian = if_any(starts_with('AIAN')),
-    wht  = if_any(starts_with('Wht')),
-    afr  = if_any(starts_with('Afr')),
-    lat  = if_any(starts_with('Lat')),
-    mena = if_any(starts_with('MENA')),
-    j    = if_any(starts_with('J')),
-    oth  = if_any(starts_with('Oth'))
-  ) %>%
-  select(PERWT, nhpi, asn, aian, wht, afr, lat, mena, j, oth) %>%
-  # Get sums (number of people) identifying as each group
-  mutate(across(where(is.logical), ~ PERWT * .)) %>%
-  # Remove person weight colum (population total) because it isn't needed
-  select(-PERWT) %>%
-  apply(2, sum) %>%
-  # Convert to data frame
-  data.frame(
-    grp = names(.),
-    n.aoic = .
-  )
-
-# Get primary totals
-prim.re.grp.totals = primary.counts %>%
-  # Condense into groups
-  mutate(
-    grp = case_when(
-      grepl('^NHPI', re) ~ 'nhpi',
-      grepl('^Asn',  re) ~ 'asn',
-      grepl('^AIAN', re) ~ 'aian',
-      grepl('^Wht',  re) ~ 'wht',
-      grepl('^Afr',  re) ~ 'afr',
-      grepl('^Lat',  re) ~ 'lat',
-      grepl('^MENA', re) ~ 'mena',
-      grepl('^J',    re) ~ 'j',
-      grepl('^Oth',  re) ~ 'oth'
-    )
-  ) %>%
-  group_by(grp) %>% 
-  summarise(n.primary = sum(n.primary)) %>%
-  ungroup()
-
-combined.grp.totals = merge( prim.re.grp.totals, aoic.re.grp.totals, all = TRUE)
-
-combined.grp.totals
-
-write.csv(
-  combined.grp.totals,
-  file = 'oregon_oha/reclassified_RE_grp_counts_2025-09-16_for_OHA.csv',
-  row.names = FALSE, na = ''
+  pums.rarest %>% select(CBSERIAL, PERNUM, realdpri = primary), row.names = FALSE,
+  'oregon_oha/acs_realdpri_2023_5yr.csv'
 )
