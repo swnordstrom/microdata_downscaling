@@ -325,15 +325,22 @@ pums_out = pums_out |>
         c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str),
         # NOTE: original version has a bug that does not catch Mexican (American) Indian
         # ~ grepl('((central)|(south)|(mexican)|(latin))\\s(american\\s)?indian', .) |
-        ~ grepl('((central)|(south)|(mexican)|(latin))\\samerican\\sindian', .) |
-          grepl('aztec', .) | grepl('inca', .) | grepl('maya', .) | 
-          grepl('mixtec', .) | grepl('taino', .) | grepl('tarasc', .)  
-      ) |
+        ~ grepl('((central)|(south)|(latin)) american indian', .) |
+          # grepl('mexican indian', .) |
+          grepl('aztec|inca|maya|mixtec|taino|tarasc|yaqui', .)
+      ) | (
+        # NOTE: putting this in here because the prior script caught mexican 
+        # american indian for race but not for ancestry (lol)
+        grepl('mexican american indian', rac2p_str)
+      ) | 
         # OR
         # or, listing "tribe not specified" or "other specified Amer. Indian tribe" or listing 'AIAN' as one of many races
         # and listing birth place elsewhere in Americas
         # ((RACED %in% c(361, 399) | grepl('AIAN', raced.char)) & BPL %in% 110:300)
-        (grepl('specified', rac2p_str) & pobp %in% 300:399)
+        # ((grepl('specified', rac2p_str) | grepl('([^(\\/or)] |^)american indian', rac3p_str)) & pobp %in% c(72:78, 300:399))
+        # NOTE: includes Canada for BPL here (as in original) but this should be fixed...
+        # (there are six records in here that are off too, but I don't know how to fix them or why they don't appear in original)
+        ((grepl('specified', rac2p_str) | grepl('american indian', rac3p_str)) & pobp %in% c(72:78, 300:399))
     ),
     ### - American Indian
     # Not born elsewhere in India AND not Latin or Alaska Native AND
@@ -343,7 +350,8 @@ pums_out = pums_out |>
       # NOTE: there's a rac3 item that gets flagged here but not in the old script...
         if_any(
           c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str),
-          ~ grepl('([^((central)|(south)|(mexican)|(latin)|(\\/or))]\\s|^)american\\sindian', .) | 
+          ~ grepl('([^((central)|(south)|(mexican)|(latin)|(\\/or))]\\s|^)american\\sindian', .) |
+            grepl('native american', .) |
             grepl('apache', .) | grepl('blackf', .) | grepl('cherok', .) | grepl('cheyen', .) | 
             grepl('creek', .) | grepl('chickas', .) | grepl('choct', .) | grepl('comanch', .) | 
             grepl('crow', .) | grepl('iroqu', .) | grepl('kiowa', .) | grepl('lumbee', .) | 
@@ -372,7 +380,7 @@ pums_out = pums_out |>
         # LANGUAGE %in% c(70, 72:83, 85:87, 90, 93) |
         # or, multiple races listed, including American Indian (AIAN) or tribe and not born in Latin America or India
         # (RACED > 800 & (grepl('AIAN', raced.char) | grepl('[Aa]merican\\s[Ii]ndian', raced.char)) & !(BPL %in% c(110:300, 521)))
-          (grepl('specified', rac2p_str) & !(pobp_dict %in% c(210, 300:399)))
+          ((grepl('specified', rac2p_str) | grepl('american indian', rac3p_str)) & !(pobp %in% c(210, 300:399)))
       ),
     
     ##### == BLACK GROUPS == #####
@@ -439,33 +447,23 @@ pums_out = pums_out |>
     ),
     ### - Asian Indian
     # Identifies as Asian (or identifies as "American Indian" but born in India)
-    AsnInd = (racasn | racsor | (racaian & grepl('^india$', pobp_str))) & (
+    AsnInd = (racasn | rac1p %in% 8 | (racaian & grepl('^india$', pobp_str))) & (
       # Ancestry includes Asian Indian, Bengali, East Indies, Punjabi, Karnatakan, Assamese, Gujarati
       if_any(
         c(anc1p_str, anc2p_str),
-        ~ grepl('asian\\sindia', .) | grepl('bengal', .) | grepl('east\\sindi[ea]', .) | grepl('punjab', .) |
-          grepl('karna', .) | grepl('assam', .) | grepl('gujar', .)
+        ~ grepl('asian india|bengal|east indi[ea]|punjab|karna|assam|gujar', .) |
+          # NOTE: this is added here ONLY for matching with original script
+          # (where Bangladeshi is a subcategory within 'Bengali' ancestry...)
+          grepl('banglad', .)
       ) | (
       # OR  born in India and speaking Indian language
         grepl('^india$', pobp_str) & (
-          grepl('hindi', lanp_str)| grepl('urdu', lanp_str) | grepl('other\\sindo', lanp_str) | grepl('sanskr', lanp_str) |
-          grepl('bengal', lanp_str) | grepl('p[ua]njab', lanp_str) | grepl('marath', lanp_str) | grepl('gujara', lanp_str) |
-          grepl('bihari', lanp_str) | grepl('rajasth', lanp_str) | grepl('oriya', lanp_str) | grepl('assam', lanp_str) |
-          grepl('kashmi', lanp_str) | grepl('kannad', lanp_str) | grepl('dravid', lanp_str) | grepl('teleg', lanp_str) |
-          grepl('malayal', lanp_str)
+          grepl('hindi|urdu|other indo|sanskr|bengal|p[ua]njab|marath|gujara', lanp_str) |
+          grepl('bihari|rajasth|oriya|assam|kashmi|kannad|dravid|tel[ue]g|malayal|konkan', lanp_str)
         ) 
       ) |
       # OR specifies "Asian indian" in race
-        if_any(c(rac2p_str, rac3p_str), ~ grepl('asian\\sindia', .))
-      #   # # or, born in India (52100) and speaks Hindi (3100-3102), Urdu (3103), Other Indo-Iranian (3104),
-      #   # Sanskrit (3111), Bengali (3112), Panjabi (3113), Marathi (3114), Gujarathi (3115), Bihari (3116),
-      #   # Rajasthani (3117), Oriya (3118), Assamese (3119), Kashmiri (3120), Kannada (3130), India nec (3140),
-      #   # Dravidian (4000), Telegu (4003), Malayalam (4004)
-      #   (BPLD %in% 52100 & LANGUAGED %in% c(3100:3104, 3111:3120, 3130:3140, 4000, 4003:4004)) | 
-      #   # or, detailed race IDed as Asian Indian (610), Sikh (657), Asian Indian + asian write-in (678),
-      #   # white + asian indian (814), black + asian indian (835), AIAN and asian indian (852),
-      #   # asian indian and PI write-in (866), asian indian + other write-in (884), 
-      #   RACED %in% c(610, 657, 678, 814, 835, 852, 866, 884) 
+        if_any(c(rac2p_str, rac3p_str), ~ grepl('asian\\sindian($|( alone)|(; [a-z]+[^\\/][$ ]))', .))
     ),
     ### = Cambodian
     # Identifies as Asian/other AND
@@ -506,7 +504,11 @@ pums_out = pums_out |>
     # Asian and
     AsnFilipino = (racasn | rac1p %in% 8) & (
       # with ancestry or race including Filipino
-      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('filip', .)) | (
+      if_any(
+        c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), 
+        # (below string is to exclude some rac3p clunkers; rac3p (85, 87, 96)
+        ~ grepl('filipino($|( alone)|;( \\w+[^\\/]($|\\w+ )))', .)
+        ) # | (
         # OR, born in Philippines or speaking a Filipino language
         # have no other reported ancestry and listing race as other/write-in
         # NOTE: clean this up in the next version so that ancestry 999 applies to both conditions (see commented code below)
@@ -515,14 +517,14 @@ pums_out = pums_out |>
         # if_any(c(lanp_str, pobp_str), ~ grepl('tagal', .) | grepl('philip', .) | grepl('[il]loc', .) | grepl('[cs]ebua', .)) &
         #   anc1p %in% 999 & grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str)
         # Detailed race includes other Asian and
-        grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str) & (
-          # either speaks a Filipino language OR
-          (grepl('tagal', lanp_str) | grepl('filip', lanp_str) | grepl('[il]loc', lanp_str) | grepl('[cs]ebua', lanp_str)) | (
-            # no ancestry listed and born in Philippines
-            anc1p %in% 999 & grepl('philip', pobp_str)
-          )
-        )
-      )
+      #   grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str) & (
+      #     # either speaks a Filipino language OR
+      #     grepl('tagal|filip|[il]loc|[cs]ebua', lanp_str) | (
+      #       # no ancestry listed and born in Philippines
+      #       anc1p %in% 999 & grepl('philip', pobp_str)
+      #     )
+      #   )
+      # )
     ),
     ### - Hmong
     # Asian and
@@ -548,6 +550,7 @@ pums_out = pums_out |>
       # Ancestry includes Japanese or Okinawan
       if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('jap', .) | grepl('okinaw', .)) | (
         # Or, born in Japan (501) and have no other reported ancestry
+        # NOTE: same issue as above with birthplace and other specified race/ancestry
         pobp_str %in% 'japan' & anc1p %in% 999 & grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str)
       ) 
     ),
@@ -555,7 +558,11 @@ pums_out = pums_out |>
     # IDs as Asian or other race alone and
     AsnKorean = (racasn | rac1p %in% 8) & (
       # Ancestry or race includes Korea
-      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('kor', .)) |
+      if_any(
+        c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), 
+        # doing this because there's something funny going on with one of the rac3p codes
+        ~ grepl('(^|(^| )[^j]\\w+; )korean($| alone|; \\w+\\;($| ))', .)
+      ) |
         # or race includes "Asian" and language is Korean
         (grepl('kor', lanp_str) & (grepl('asian', rac2p_str) | grepl('asian', rac3p_str)))
     ),
@@ -604,7 +611,10 @@ pums_out = pums_out |>
       # Ancestry or race includes Taiwan
       if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('^taiwan', .)) |
       # or, was born in Taiwan and speaks Chinese or English
-        (pobp_str %in% 'taiwan' & (lanp_str %in% c('chinese', 'mandarin', 'cantonese', 'min nan chinese') | !is.na(lanp)))
+        (pobp_str %in% 'taiwan' & (lanp_str %in% c('chinese', 'mandarin', 'cantonese', 'min nan chinese') | is.na(lanp)))
+      # NOTE: in update, should put a flag in to exclude rac2 "chinese, not taiwanese"
+      # (allowing English in this picks up a couple of respondents who are Indian...)
+      # NOTE: original script does not pick up the "chinese and taiwanese" race, by mistake?
     ),
     ### - Thai
     # Identifies as Asian and
@@ -615,8 +625,9 @@ pums_out = pums_out |>
     ### - Vietnamese
     # Asian and
     AsnViet = (racasn | rac1p %in% 8) & (
-      # ancestry or race includes vietnamese
-      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('([^(\\/or)]\\s|^)viet', .)) | (
+      # ancestry or race includes vietnamese (excluding the and/or vietnamese rac3 AND the 'vietnamese; other...)
+      # NOTE: will want to go back and modify to include Vietnamese; other Asian rac3
+      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('viet', .) & !grepl('other', .)) | (
         # or detailed race includes "other asian" and birthplace or language is vietnam(ese)
         # NOTE: IPUMS encoding means that original script did not pick up a (correct) rac3p including vietnam
         # (raced == 944 probably) (maybe trailing semicolon can suppress for now...)
@@ -689,9 +700,9 @@ pums_out = pums_out |>
     # NOTE: update to only use racnh (current code is just to match)
     NHPIHawaii = (racnh | racpi | rac1p %in% 8) & (
       # Language or ancestry includes Hawaiian
-      if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('hawai', .) & !grepl("^other", .)) |
+      if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('hawai', .)) |
         # or race includes native hawaiian (but not the uninformative "and/or" NH) 
-        if_any(c(rac2p_str, rac3p_str), ~ grepl('([^(\\/or)]\\s|^)native\\shawaiian', .))
+        if_any(c(rac2p_str, rac3p_str), ~ grepl('([^(\\/or)] |^)native hawaiian', .))
     ),
     ### - Marshallese
     # IDs as Pacific Islander and
@@ -721,7 +732,11 @@ pums_out = pums_out |>
     # (3570) or other eastern malayo-polynesian languages (3600)
     # birthplace in Fiji (508), Marshall Islands (511), Micronesia (512), Tonga (523), or Samoa (527)
     # AND not matching any other PI groups
-    NHPIOther = (racpi | (rac1p %in% 8 & (lanp %in% 3220:3600 | pobp %in% c(508:512, 523:527))) ) &
+    NHPIOther = (
+      racpi | racnh |
+        (rac1p %in% 8 & (lanp %in% 3220:3600 | pobp %in% c(508:512, 523:527))) |
+        grepl('([^(\\/or) ]|; |^)(native hawaiian and )?(other )?pacific island', rac3p_str)
+    ) &
       !(NHPICham | NHPIMarshall | NHPICOFA | NHPISamoan | NHPIHawaii | NHPITongan | NHPIFijian),
     
     ##### == MIDDLE EASTERN GROUPS == #####
@@ -730,7 +745,7 @@ pums_out = pums_out |>
       # Ancestry is Egyptian 
       if_any(c(anc1p_str, anc2p_str), ~ grepl('egypt', .)) | 
         # OR born in Egypt and ancestry is Middle Eastern or Arab/other Arab
-        if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|egypt', .))
+        if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|egypt', .) & grepl('egypt', pobp_str))
     ),
     ### - Iraqi
     MENAIraq = (
@@ -973,18 +988,33 @@ compare_counts |>
   arrange(abs(count.change))
 
 pums_compare = merge(
-  pums_out |> select(serialno, sporder, NHPIMarshall),
-  orig_reald |> filter(NHPIMarshall) |> select(CBSERIAL, PERNUM) |> mutate(in.y = TRUE),
+  pums_out |> select(serialno, sporder, AsnJapanese),
+  # pums_out |> select(serialno, sporder, AIANCan, AIANLat, AIANInd),
+  orig_reald |> filter(AsnJapanese) |> select(CBSERIAL, PERNUM) |> mutate(in.y = TRUE),
   by.x = c('serialno', 'sporder'), by.y = c('CBSERIAL', 'PERNUM'),
   all = TRUE
 ) |>
-  mutate(in.y = ifelse(is.na(in.y), FALSE, in.y)) |>
-  filter(NHPIMarshall | in.y)
+  mutate(in.y = ifelse(is.na(in.y), FALSE, in.y))
 
 pums_compare |>
-  merge(pums_out |> select(serialno, sporder, ends_with('str'))) |> select(-hisp_str) |>
-  filter(NHPIMarshall + in.y < 2) # |> select(anc1p_str, anc2p_str, lanp_str, AIANInd, in.y)
+  filter(AsnJapanese + in.y == 1) |>
+  merge(pums_out |> select(serialno, sporder, ends_with('str'))) |> select(-c(hisp_str)) |>
+  arrange(AsnJapanese)
 
 # merge(pums_out |> select(serialno, sporder, racnh, racpi))
 
-# CURRENTLY: trying to fix the Hawaiian assignment
+# pums_compare |>
+#   filter(AsnJapanese) |>
+#   merge(pums_out |> select(serialno, sporder, rac3p, ends_with('str'))) |> 
+#   count(rac3p, rac3p_str, in.y)
+# 
+# # problematic for Japanese: 10, 54, 66, 88, 94, 97
+# 
+# # from above data frame to this:
+# # (but there are some other inclusion criteria as well...)
+# filter(rac3p %in% c(10, 54, 66, 88, 94, 97)) |> 
+#   mutate(japan = if_any(c(anc1p_str, anc2p_str), ~ grepl('japan', .))) |> 
+#   count(rac3p_str, japan, in.y) |> 
+#   arrange(rac3p_str, japan, in.y)
+
+
