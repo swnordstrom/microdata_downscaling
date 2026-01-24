@@ -1,3 +1,22 @@
+# Script that reads in person-level PUMS data and recreates, almost perfectly,
+# the original (2025) REALD assignments generated with the IPUMS datasets
+# NOTES:
+# - due to size I did NOT upload the PUMS to the repo
+#   re-running the script will require doing that manually
+#   file readin is in pums_raw = read.csv('global_inpus/psam_p41.csv')) |>
+# - there's also some code in here (e.g., update_counts()) that I used
+#   when reconciling but are not needed for downscaling
+# - future improvements and/or other notes are headed with NOTE:
+#   (doing a ctrl+f for these will give all updates)
+# - Not sure yet if this script will be permanent or if it is mutable
+#   i.e., not sure if I will make a separate script for incorporating
+#   into the REALD workflow or if I will build on this one
+# - I will go through at some point and tidy up the regex calls... 
+#   again not sure if I'll do that here or elsewhere
+# 
+# Scott Nordstrom - finalized 23 Jan 2026 (scottn@pdx.edu)
+
+# Packages typically used
 library(dplyr)
 library(tidyr)
 library(purrr)
@@ -58,23 +77,23 @@ head(pums_raw)
 nrow(pums_raw)
 names(pums_raw)
 
-# Additional read-in for assigned probability of Jewish ancestry
-pums_jet = readRDS(file = 'oregon_oha/01_data_inputs/pums_jet_v03.rds') 
-
-# Check to make sure number of rows matches
-nrow(pums_jet) == nrow(pums_raw) # they don't... at the moment...
-
-pums_jet = pums_jet |>
-  mutate(
-    # Add in Jewish grouping columns
-    JAshkenazi = ethgrpi %in% 1,
-    JSephardic = ethgrpi %in% 2,
-    JOther     = ethgrpi %in% 3
-  ) |>
-  # Get rid of other columns
-  select(-contains('eth'))
-
-head(pums_jet)
+# # Additional read-in for assigned probability of Jewish ancestry
+# pums_jet = readRDS(file = 'oregon_oha/01_data_inputs/pums_jet_v03.rds') 
+# 
+# # Check to make sure number of rows matches
+# nrow(pums_jet) == nrow(pums_raw) # they don't... at the moment...
+# 
+# pums_jet = pums_jet |>
+#   mutate(
+#     # Add in Jewish grouping columns
+#     JAshkenazi = ethgrpi %in% 1,
+#     JSephardic = ethgrpi %in% 2,
+#     JOther     = ethgrpi %in% 3
+#   ) |>
+#   # Get rid of other columns
+#   select(-contains('eth'))
+# 
+# head(pums_jet)
 
 ### Read in data dictionaries
 # Get the names of the PUMS data dictionary files
@@ -476,14 +495,17 @@ pums_out = pums_out |>
     ),
     ### = Chinese
     # Asian and
-    AsnChinese = (racasn | rac1p %in% 8) & (
+    AsnChinese = (racasn | rac1p %in% 8) & !(rac2p_str %in% 'taiwanese alone') & (
+      # NOTE: note Taiwanese exception above
       # Ancestry includes Chinese, Cantonese, Mandarin, Hong Kong (NOT Taiwan)
       if_any(
-        c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), 
-        ~ grepl('chin[ae]', .) | grepl('canton', .) | grepl('mandar', .) | grepl('hong\\skong', .)
-      ) |
-        # OR birthplace is China or Hong Kong, 
-        # NOTE: might want to correct this to birthplace and a language condition
+        c(anc1p_str, anc2p_str, rac2p_str), 
+        ~ grepl('chin[ae]|canton|mandar|hong kong', .)
+      ) | (
+        # Separate flag for rac3p, where some of the labels are unreliable
+        grepl('chinese', rac3p_str) & !(rac3p %in% c(65:66, 85:86, 94:95))
+      ) | # OR birthplace is China or Hong Kong, 
+          # NOTE: might want to correct this to birthplace and a language condition
         (pobp_str %in% c('china', 'hong kong'))
     ),
     ### - Myanmar
@@ -548,11 +570,14 @@ pums_out = pums_out |>
     # IDs as Asian or other race alone and
     AsnJapanese = (racasn | rac1p %in% 8) & (
       # Ancestry includes Japanese or Okinawan
-      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('jap', .) | grepl('okinaw', .)) | (
+      if_any(c(anc1p_str, anc2p_str, rac2p_str), ~ grepl('japan|okinaw', .)) | (
+        # Special flags for rac3p (because some of these labels are not reliable)
+        grepl('japan', rac3p_str) & !(rac3p %in% c(54, 66, 88, 94, 97)) 
+      ) | (
         # Or, born in Japan (501) and have no other reported ancestry
         # NOTE: same issue as above with birthplace and other specified race/ancestry
-        pobp_str %in% 'japan' & anc1p %in% 999 & grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str)
-      ) 
+        pobp_str %in% 'japan' & anc1p %in% 999 & grepl('japanese; and\\/or asian', rac3p_str)
+      )
     ),
     ### - Korean
     # IDs as Asian or other race alone and
@@ -586,24 +611,22 @@ pums_out = pums_out |>
     ),
     ### - South Asian
     # Identifies as Asian and not born in India and:
-    AsnSouth = (racasn | rac1p %in% 8) & !grepl('^india$', pobp_str) & (
+    AsnSouth = (racasn | rac1p %in% 8) & !(pobp_str %in% 'india') & (
       # has ancestry matching south asian nationalities/ethnic groups
       # NOTE: coding issue in original script means bangladeshi does NOT get flagged in the other script...
       if_any(
         c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str),
-        ~ grepl('nepal', .) | grepl('maldiv', .) | grepl('bhutan', .) | grepl('lanka', .) |
-          grepl('bangla', .) | grepl('tamil', .) | grepl('tibet', .) | grepl('sing?ha', .) |
-          grepl('^shan', .) | grepl('sindh', .) | grepl('brune', .)
+        # ~ grepl('nepal|maldiv|bhutan|lanka|bangla|tamil|tibet|sing?ha|^shan|sindh|brune', .)
+        ~ grepl('nepal|maldiv|bhutan|lanka|tamil|tibet|sing?ha|^shan|sindh|brune', .)
       ) | (
         # or, race reported as "other Asian" or "Asian write-in" and 
         # born in Brunei, Bangladesh, Bhutan, Sri Lanka, Maldives , Nepal
         # (bug in original script)
-        # NOTE: original script has some coding error where "chinese; japanese" gets flagged as South Asian for some reason
-        grepl('([^(\\/or)]\\s|^)other\\sasian', rac3p_str) & (
-          grepl('brune', pobp_str) | grepl('bangla', pobp_str) | grepl('bhutan', pobp_str) |
-            grepl('lanka', pobp_str) | grepl('maldiv', pobp_str) | grepl('nepal', pobp_str)
-        )
+        grepl('asian indian|([^(\\/or)] |^)other\\sasian', rac3p_str) & 
+          grepl('brune|bangla|bhutan|lanka|maldiv|nepal', pobp_str)
       )
+      # NOTE: error in original script (missing parentheses, see L445) means there are a lot of records getting
+      # wrongly tagged as AsnSouth in the original (not repeated here)
     ),
     ### - Taiwanese
     # Identifies as Asian, and
@@ -975,7 +998,13 @@ pums_out = pums_out |>
     # IDs as white or has *both* ancestries from Europe, non-Hispanic, other
     WhtOther = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8 & !hisplog)) & !(
       WhtEng | WhtGer | WhtIre | WhtItal | WhtPol | WhtRom | WhtRus | WhtSco | WhtUkr | WhtSlav
-    )
+    ),
+    
+    ##### == OTHER == #####
+    OtherUnspec = !if_any(
+      c(starts_with('MENA'), starts_with('Wht'), starts_with('Asn'), starts_with('Afr'),
+        starts_with('Lat'), starts_with('AIAN'), starts_with('NHPI')), ~ .
+    ) & (rac1p %in% 8)
   )
   
 # ><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>< #
@@ -983,38 +1012,42 @@ pums_out = pums_out |>
 compare_counts = update_counts()
 
 compare_counts |>
-  # filter(x != y) |>
+  filter(in.new != in.old) |>
   mutate(count.change = in.new - in.old) |>
   arrange(abs(count.change))
 
-pums_compare = merge(
-  pums_out |> select(serialno, sporder, AsnJapanese),
-  # pums_out |> select(serialno, sporder, AIANCan, AIANLat, AIANInd),
-  orig_reald |> filter(AsnJapanese) |> select(CBSERIAL, PERNUM) |> mutate(in.y = TRUE),
-  by.x = c('serialno', 'sporder'), by.y = c('CBSERIAL', 'PERNUM'),
-  all = TRUE
-) |>
-  mutate(in.y = ifelse(is.na(in.y), FALSE, in.y))
 
-pums_compare |>
-  filter(AsnJapanese + in.y == 1) |>
-  merge(pums_out |> select(serialno, sporder, ends_with('str'))) |> select(-c(hisp_str)) |>
-  arrange(AsnJapanese)
+# # Groups that have a discrepancy in counts:
+#           reald in.new in.old count.change
+# 1       AIANInd   8416   8417           -1
+# 2        AsnLao    272    271            1
+# 3       AsnMyan    103    102            1
+# 4       AIANCan     85     82            3
+# 5   AsnFilipino   2186   2189           -3
+# 6  AsnTaiwanese    368    364            4
+# 7       AIANLat    725    719            6
+# 8   AsnJapanese   1707   1720          -13
+# 9       AsnViet   1750   1737           13
+# 10   AsnChinese   3006   3022          -16
+# 11    NHPIOther    433    455          -22
+# 12   NHPIHawaii    612    581           31
+# 13     AsnOther    845    798           47
+# 14     AsnSouth    234    356         -122
 
-# merge(pums_out |> select(serialno, sporder, racnh, racpi))
 
+# ><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><><>< #
+
+### Some code for comparing and debugging:
+# pums_compare = merge(
+#   pums_out |> select(serialno, sporder, AsnChinese),
+#   # pums_out |> select(serialno, sporder, AIANCan, AIANLat, AIANInd),
+#   orig_reald |> filter(AsnChinese) |> select(CBSERIAL, PERNUM) |> mutate(in.y = TRUE),
+#   by.x = c('serialno', 'sporder'), by.y = c('CBSERIAL', 'PERNUM'),
+#   all = TRUE
+# ) |>
+#   mutate(in.y = ifelse(is.na(in.y), FALSE, in.y))
+# 
 # pums_compare |>
-#   filter(AsnJapanese) |>
-#   merge(pums_out |> select(serialno, sporder, rac3p, ends_with('str'))) |> 
-#   count(rac3p, rac3p_str, in.y)
-# 
-# # problematic for Japanese: 10, 54, 66, 88, 94, 97
-# 
-# # from above data frame to this:
-# # (but there are some other inclusion criteria as well...)
-# filter(rac3p %in% c(10, 54, 66, 88, 94, 97)) |> 
-#   mutate(japan = if_any(c(anc1p_str, anc2p_str), ~ grepl('japan', .))) |> 
-#   count(rac3p_str, japan, in.y) |> 
-#   arrange(rac3p_str, japan, in.y)
-
-
+#   filter(AsnChinese + in.y == 1) |>
+#   merge(pums_out |> select(serialno, sporder, ends_with('str'))) |> select(-c(hisp_str)) |>
+#   arrange(AsnChinese)
