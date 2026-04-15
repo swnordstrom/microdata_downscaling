@@ -88,9 +88,9 @@ pums_str = pums_raw |>
   merge(pobp_dict, all.x = TRUE) |>
   # Merge in race 1
   merge(rac1p_dict, all.x = TRUE) |>
-  # Merge in race 2 (2019-2022)
+  # Merge in race 2 (2019-2023)
   merge(rac2p19_dict, all.x = TRUE) |>
-  # Merge in race 2 (2023)
+  # Merge in race 2 (2024)
   merge(rac2p24_dict, all.x = TRUE) |>
   # Combine rac2 into a single column
   mutate(
@@ -281,8 +281,8 @@ pums_out = pums_out |>
         # Ancestry, detailed race, or language matches northern North American Indigenous IDs
         if_any(
           c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str), 
-          ~ grepl('aleut|eskim|inuit|tling|atha[bp]|inupia|algonq', .) |
-            grepl("yup\'|ojib|salish|iroqu|shosh|colvil|akota|siou(x)?", .) |
+          ~ grepl('eskim|inuit|tling|atha[bp]|inupia|algonq|chipp|blackf', .) |
+            grepl("yup\'|ojib|salish|iroqu|colvil|akota|siou(x)?|potaw", .) |
             grepl('([^(central)|(south)|(mexican)|(latin)|(\\/or)] |^)american indian', .) | 
             grepl('native (north )?american', .)
         )
@@ -409,7 +409,7 @@ pums_out = pums_out |>
         # OR  born in India and speaking Indian language
         (pobp_str %in% 'india') & (
           grepl('hindi|urdu|other indo|sanskr|bengal|p[ua]njab|marath|gujara|konkan|tamil', lanp_str) |
-            grepl('bihari|rajasth|oriya|assam|kashmi|kannad|dravid|tel[ue]g|malayal', lanp_str)
+            grepl('bihari|rajasth|oriya|assam|kashmi|kannad|dravid|tel[ue]g|malaya|^indi', lanp_str)
         ) | 
           grepl('other asian alone', rac2p_str) | grepl('other asian($|; [^(\\and/or)]| [^(alone)])', rac3p_str)
       )
@@ -548,10 +548,13 @@ pums_out = pums_out |>
     # Asian or other race alone and
     AsnPakistani = (racasn | rac1p %in% 8) & (
       # and ancestry or race includes Pakistani
-      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('pakis', .)) | 
+      if_any(c(anc1p_str, anc2p_str, rac2p_str, rac3p_str), ~ grepl('pakis', .)) | (
         # or born in Pakistan (52410) and speaks Urdu (3103)
         # NOTE: expand this to include Punjabi ancestry
-        (grepl('pakis', pobp_str) & grepl('urdu', lanp_str))
+        grepl('pakis', pobp_str) & (
+          if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('urdu|punjab|pasht', .))
+        )
+      )
     ),
     ### - South Asian
     # Identifies as Asian and not born in India and:
@@ -559,7 +562,7 @@ pums_out = pums_out |>
       # has ancestry matching south asian nationalities/ethnic groups
       if_any(
         c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str),
-        ~ grepl('nepal|maldiv|bhutan|lanka|bangla|tamil|tibet|sing?ha|^shan|sindh|bengal', .)
+        ~ grepl('nepal|maldiv|bhutan|lanka|bangla|tamil|tibet|sing?ha|^shan|sindh|benga', .)
       ) | (
         # born in Bangladesh, Bhutan, Sri Lanka, Maldives, Nepal
         # or, detailed race specifies Asian Indian or Other Asian 
@@ -600,13 +603,10 @@ pums_out = pums_out |>
     # Asian or
     AsnOther = (racasn | (
       # race is "some other race alone" AND
-      rac1p %in% 8 &
-        # born in Bangladesh (202), Bhutan (203), Myanmar (205), Cambodia (206), China (207), Hong Kong (208),
-        # India (210), Indonesia (211), Japan (215), Laos (223), Malaysia (226), Nepal (229), Pakistan (231),
-        # Philippines (233), Singapore (236), Sri Lanka (238), Taiwan (240), Thailand (242), Vietnam (247),
-        # Asia (249), South Central Asia n.s. (253) AND
-        # NOTE: excluding kazakhstan, kyrgysztan, mongolia, uzbekistan here
-        pobp %in% c(202:211, 215, 223, 226, 229:233, 236:238, 240:242, 247, 249:253) & 
+      rac1p %in% 8 & (
+        # born in Asia, including Central Asia, not including Middle East (Iran and east)
+        grepl('afghan|bangl|bhut|myan|camb|china|hong|india$|indon|jap|kor|laos', pobp_str) |
+          grepl('malay|mongol|nepal|philippi|singa|sri|taiw|thai|vietn|asia|stan$', pobp_str)
         # Language includes India NEC (1340), Hindi (1350), Urdu (1360), Bengali (1380), Punjabi (1420), 
         # Marathi (1440), Gujarathi (1450), Nepalese (1500), Sinhalese (1530), Other Indo-European (1564), 
         # Telegu (1730), Kannada (1737), Malayalam (1750), Tamil (1765), Khmer (1900), Vietnamese (1960),
@@ -615,7 +615,7 @@ pums_out = pums_out |>
         # Other languages of Asia (2850), Filipino (2910), Tagalog (2920), Cebuano (2950), Ilocano (3150),
         # Other Philippine Languages (3190)
         # NOTE: may want to add some others in here (e.g., Farsi)
-        lanp %in% c(1340:1420, 1440:1530, 1564, 1730:3190)
+        ) & lanp %in% c(1340:1420, 1440:1530, 1564, 1730:3190)
       )
     ) & !(
       # and not in any other category
@@ -651,7 +651,7 @@ pums_out = pums_out |>
         # NOTE: (needs to incldue rac2p *and* rac3p)
         grepl('fiji', pobp_str) & (
           grepl('[^(\\/or)]( native hawaiian sand )?other pacific', rac3p_str) |
-            grepl('^other\\spacific', rac3p_str)
+            grepl('^other pacific', rac3p_str)
         )
       )
     ),
@@ -670,7 +670,7 @@ pums_out = pums_out |>
       if_any(c(anc1p_str, anc2p_str, lanp_str, rac2p_str, rac3p_str, pobp_str), ~ grepl('marshall', .))
     ),
     ### - Samoan
-    # NOTE: estimate currently under-estimating (maybe because of RACEPACIS flag)
+    # NOTE: estimate currently under-estimating
     # IDs as Pacific Islander AND 
     NHPISamoan = (racpi | racnh | rac1p %in% 8) & (
       # Ancestry, race, birthplace, or language includes Samoa
@@ -687,13 +687,13 @@ pums_out = pums_out |>
     # Marshallese (3270), Chuukese (3350), Samoan (3420), Tongan (3500), Hawaiian
     # (3570) or other eastern malayo-polynesian languages (3600)
     # birthplace in Fiji (508), Marshall Islands (511), Micronesia (512), Tonga (523), or Samoa (527)
+    # OR detailed race includes "pacific islander"
     # AND not matching any other PI groups
     # NOTE: should include Australia/NZ in future version
     NHPIOther = (
       racpi | racnh |
-        (rac1p %in% 8 & (lanp %in% 3220:3600 | pobp %in% c(508:512, 523:527))) |
-        # NOTE: could add in rac2p here?
-        grepl('([^(\\/or) ]|; |^)(native hawaiian and )?(other )?pacific island', rac3p_str)
+        (rac1p %in% 8 & (lanp %in% 3220:3600 | pobp %in% setdiff(c(60, 500:528), c(501, 515)))) |
+        (grepl('pacific island', rac3p_str) & !grepl('and\\/or', rac3p_str))
     ) &
       !(NHPICham | NHPIMarshall | NHPICOFA | NHPISamoan | NHPIHawaii | NHPITongan | NHPIFijian),
     
@@ -713,7 +713,7 @@ pums_out = pums_out |>
         # OR born in Iraq AND 
         # ancestry is Assyrian/Kurdish/Chalean/Middle Eastern/Arab or speaks Aramaic/Arabic
           grepl('iraq', pobp_str) & (
-            grepl('(arab|arama)ic', lanp_str) | 
+            grepl('(arab|arama)ic|kurd', lanp_str) | 
             if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyri|kurd|chald', .)) 
           )
         )
@@ -722,7 +722,11 @@ pums_out = pums_out |>
     # Has Iranian ancestry
     MENAIran = if_any(c(anc1p_str, anc2p_str), ~ grepl('iran', .)) | 
       # or was born in Iran and speaks Farsi or Dari
-      (grepl('iran', pobp_str) & (grepl('^dari|farsi', lanp_str))),
+      (grepl('iran', pobp_str) & (
+        grepl('^dari|farsi|kurd', lanp_str) | 
+          if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyr|kurd|chald', .))
+      )
+    ),
     ### - Israeli
     # Has Israeli ancestry
     MENAIsr = if_any(c(anc1p_str, anc2p_str), ~ grepl('israel', .)) | 
@@ -755,13 +759,15 @@ pums_out = pums_out |>
       grepl('syria', pobp_str) & (
         # has MidEast/Arab, Assyrian, or Kurdish ancestry or speaks Arabic/Neo-Aramaic
         if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyr|kurd|chald', .)) |
-          grepl('(arab|arama)ic', lanp_str)
+          grepl('(arab|arama)ic|kurd', lanp_str)
       )
     ),
     ### - Turkish
     # Has Turkish ancestry or speaks Turkish
     # (Turkish language flag may be too generous alone, but it gets us to the ACS counts)
-    MENATurkish = if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('turkis', .)),
+    MENATurkish = if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('turkis', .)) | (
+      pobp_str %in% 'turkey' & if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|assyr|kurd|chald', .))
+    ),
     ### - MENA Other
     # NOTE: in next version, should also exclude all other MENA groups
     MENAOther = (
@@ -792,16 +798,13 @@ pums_out = pums_out |>
     WhtEng = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8)) & (
       # has English ancestry OR 
       if_any(c(anc1p_str, anc2p_str), ~ grepl('^engl', .)) | (
-        # NOTE: bug in original code classified 30-40 records with british+(scots/welsh) as English
-        # below code is CORRECT but does not match new code (fix upon upgrade)
         # Ancestry includes British Isles without specifying welsh, scotish/scots irish
         if_any(c(anc1p_str, anc2p_str), ~ grepl('^brit', .)) &
-          !if_any(c(anc1p_str, anc2p_str), ~ grepl('wels', .) | grepl('^scot', .))
+          !if_any(c(anc1p_str, anc2p_str), ~ grepl('^scot|wels', .))
       ) | (
-        # THIS code is incorrect but will match previous output
         # OR speaks English, born in England, and ancestry is non-descript n/w Euro, Euro, or not given
         grepl('engl', pobp_str) & lanp %in% 'N' & (
-          grepl('(^[nw].+|^)euro', anc1p_str) | anc1p %in% c(996, 998:999)
+          grepl('(^[nw].+|^)euro', anc1p_str) | anc1p %in% c(924, 996, 998:999)
         )
       )
     ),
@@ -809,20 +812,21 @@ pums_out = pums_out |>
     # White AND
     WhtGer = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8)) & (
       # ancestry includes German (not German Russian) or Prussian, OR
-      # (NOTE: this does include PA German... probably should remove...)
-      if_any(c(anc1p_str, anc2p_str), ~ grepl('german(ic)?$|pruss', .)) | (
-        # was born in Germany (453) and speaks German (2 - includes Swiss German)
-        grepl('germa', pobp_str) & grepl('germa', lanp_str)
+      if_any(c(anc1p_str, anc2p_str), ~ grepl('^german(ic)?$|pruss', .)) | (
+        # was born in Germany (453) and speaks German
+        if_all(c(pobp_str, lanp_str), ~ grepl('^german', .)) & (
+          grepl('^(n.+)?euro', anc1p_str) | anc1p %in% c(924, 996, 998:999)
+        )
       )
     ),
     ### - Irish
     # White and 
     WhtIre = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8)) & (
-      # ancestry includes Irish (not scots-irish)
+      # ancestry includes Irish or Celtic (not Scots-Irish)
       if_any(c(anc1p_str, anc2p_str), ~ grepl('^iri|^celt', .)) | (
         # OR or born in Ireland, speaks English or Irish, and no ancestry or non-descript European
         grepl('^ire', pobp_str) & (lanp %in% 'N' | grepl('^iri', lanp_str)) & (
-          grepl('^[nw].+euro', anc1p_str) | grepl('^euro', anc1p_str) | anc1p %in% c(996, 998:999)
+          grepl('^([nw].+)?euro', anc1p_str) | anc1p %in% c(924, 996, 998:999)
         )
       )
     ),
@@ -832,7 +836,9 @@ pums_out = pums_out |>
       # ancestry includes Italian or Sicilian
       if_any(c(anc1p_str, anc2p_str), ~ grepl('ital|sicil', .)) | (
         # OR born In Italy and having only Southern European or no ancestry
-        grepl('ital', pobp_str) & (grepl('^s.+euro', anc1p_str) | (anc1p %in% c(996, 998:999)))
+        if_all(c(lanp_str, pobp_str), ~ grepl('ital', .)) & (
+          grepl('^(s.+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999))
+        )
       )
     ),
     ### - Polish
@@ -841,8 +847,8 @@ pums_out = pums_out |>
       # ancestry includes Polish, OR
       if_any(c(anc1p_str, anc2p_str), ~ grepl('polish', .)) | (
         # born in Poland or speaking Polish and ancestry is nec (East) European  or NA (996, 999)
-        if_any(c(lanp_str, pobp_str), ~ grepl('pol(ish|and)', .)) & 
-          (grepl('(^e.+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999)))
+        if_all(c(lanp_str, pobp_str), ~ grepl('pol(ish|and)', .)) & 
+          (grepl('^(e.+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999)))
       )
     ),
     ### - Romanian
@@ -850,9 +856,9 @@ pums_out = pums_out |>
     WhtRom = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8)) & (
       # ancestry includes Rom or Romanian OR
       if_any(c(anc1p_str, anc2p_str), ~ grepl('^rom', .)) | (
-        # or born in Romania (456) or speaks Rumanian (14) and Eastern/nondescript European or no ancestry (999)
-        if_any(c(lanp_str, pobp_str), ~ grepl('^r[ou]m', .)) & 
-          (grepl('(^e.+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999)))
+        # or born in Romania (456) or speaks Rumanian and Eastern/nondescript European or no ancestry (999)
+        if_all(c(lanp_str, pobp_str), ~ grepl('^r[ou]m', .)) & 
+          (grepl('^(e.+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999)))
       )
     ),
     ### - Russian
@@ -867,7 +873,7 @@ pums_out = pums_out |>
             # or born in Russia or former USSR and nondescript (E) Euro or no ancestry reported (996-9)
             (
               grepl('rus|ussr|georgia$|^azerb|moldov|^armen|kazakh|kyrg|turkmen|uzbek|ukrai', pobp_str) 
-            ) & ((grepl('(^e.+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999))))
+            ) & ((grepl('^(e.+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999))))
             # NOTE: in update, aove line should probably include anc2 for e/european
           )
         )
@@ -879,7 +885,9 @@ pums_out = pums_out |>
       # Ancestry includes Scottish (88) and Scots-Irish (87), 
       # or born in Scotland and having Euro nec (183, 195) or un-reported (996, 999) ancestry and speaking English
       if_any(c(anc1p_str, anc2p_str), ~ grepl('^scot', .)) | (
-        grepl('^scot', pobp_str) & lanp %in% 'N' & ((grepl('(^[nw].+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999))))
+        grepl('^scot', pobp_str) & lanp %in% 'N' & (
+          (grepl('^([nw].+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999)))
+        )
       )
     ),
     ### - Ukrainian
@@ -888,13 +896,8 @@ pums_out = pums_out |>
       # includes Ukrainian ancestry OR
       if_any(c(anc1p_str, anc2p_str), ~ grepl('^ukra', .)) | 
         # speaks Ukrainian and
-        grepl('^ukra', lanp_str) & (
-          # has Cossack ancestry OR
-          if_any(c(anc1p_str, anc2p_str), ~ grepl('^coss', .)) | (
-            # born in Ukraine or soviet Union and has Euro/Eastern Euro/no ancestry
-            (grepl('^ukra', pobp_str) | grepl('ussr', pobp_str)) & 
-              ((grepl('(^e.+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999))))
-          )
+        grepl('^ukra', lanp_str) & grepl('^ukra|ussr', pobp_str) & ( 
+          (grepl('^(e.+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999)))
         )
     ),
     ### - Slavic
@@ -902,20 +905,16 @@ pums_out = pums_out |>
     WhtSlav = (racwht | (anc1p < 210 & (anc2p < 210 | anc2p %in% 999) & rac1p %in% 8)) & (
       if_any(
         # Ancestry includes Bulgarian, Belorussian, Czech, Croatian, Bohemian,
-        # Serbian, Macedonian, Bosnian, Slovakian, Slovenian, Yugoslavian, Slav
+        # Serbian, Macedonian, Montenegran, Bosnian, Slovakian, Slovenian, Yugoslavian,
+        # Slav
         c(anc1p_str, anc2p_str),
-        ~ grepl('bulga|belor|czech|croat|^bohe|serb|maced|bosni|slov[ae]|yugos|slav', .)
-      ) | (
-        grepl('czech|slov[ea]|croat|serb|bosn', lanp_str)
-      ) |
-        (
-          # or, born in Bulgaria, Czechoslovakia, Yugoslavia (+bosnia, serbia, montenegro, croatia) 
-          # and un-listed/non-descript ancestry
-          (
-            grepl('bulga|czech|sl[oa]v|bosn|serb|monten|croat|kosov', pobp_str) &
-              ((grepl('(^[es].+|^)euro', anc1p_str) | (anc1p %in% c(996, 998:999))))
-          )
-        )
+        ~ grepl('bulga|bel[ao]r|czech|croat|^bohe|serb|maced|monten|bosni|slov[ae]|yugos|slav', .)
+      ) | grepl('czech|slov[ea]|croat|serb|bosn', lanp_str) | (
+        # or, born in Bulgaria, Czechoslovakia, Yugoslavia (+bosnia, serbia, montenegro, croatia) 
+        # and un-listed/non-descript ancestry
+        grepl('bulga|czech|sl[oa]v|bosn|serb|monten|croat|kosov', pobp_str) &
+          ((grepl('^([es].+)?euro', anc1p_str) | (anc1p %in% c(924, 996, 998:999))))
+      )
     ),
     ### - White, other
     # IDs as white or has *both* ancestries from Europe, non-Hispanic, other
@@ -933,6 +932,11 @@ pums_out = pums_out |>
 
 ###### ================================================= ########
 # Post processing and export
+
+pums_out |>
+  select(pwgtp, starts_with(c('MENA', 'Wht', 'Asn', 'Afr', 'Lat', 'AIAN', 'NHPI'))) |> 
+  mutate(across(-pwgtp, ~ . * pwgtp)) |> 
+  apply(2, sum)
 
 # Do the primary (rarest) race assignment
 
