@@ -282,7 +282,7 @@ pums_out = pums_out |>
         if_any(
           c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str), 
           ~ grepl('eskim|inuit|tling|atha[bp]|inupia|algonq|chipp|blackf', .) |
-            grepl("yup\'|ojib|salish|iroqu|colvil|akota|siou(x)?|potaw", .) |
+            grepl("yup\'|ojib|salish|iroqu|colvil|akota|siou(x)?|potaw|penuti", .) |
             grepl('([^(central)|(south)|(mexican)|(latin)|(\\/or)] |^)american indian', .) | 
             grepl('native (north )?american', .)
         )
@@ -319,7 +319,7 @@ pums_out = pums_out |>
           grepl('lumbee|navaj|osage|p(a)?iute|pima|pot(t)?[ao]w|seminol|chipp|siou(x)?', .) | 
           grepl('tling|tohono|pueblo|hopi|delaw|salish|yak[ai]ma|colvil|houma', .) | 
           grepl('menom[io]n|yuma|trib[ae]|atha[bp]|algon|flathead|hokan|mus[kc]og', .) | 
-          grepl('oglal|penuti|zuni|caddoan|shosho|papago|tanoan|yaqu', .)
+          grepl('oglal|penuti|zuni|caddoan|shosho|papago|tanoan', .)
       ) # |
         # or, specific lower 48 tribe listed 
         # Apache (302), Blackfoot (303), Cherokee (304), Cheyenne (305), Chickasaw (306),
@@ -562,7 +562,7 @@ pums_out = pums_out |>
       # has ancestry matching south asian nationalities/ethnic groups
       if_any(
         c(anc1p_str, anc2p_str, rac2p_str, rac3p_str, lanp_str),
-        ~ grepl('nepal|maldiv|bhutan|lanka|bangla|tamil|tibet|sing?ha|^shan|sindh|benga', .)
+        ~ grepl('nepal|maldiv|bhutan|lanka|bangla|tamil|sing?ha|^shan|sindh|benga', .)
       ) | (
         # born in Bangladesh, Bhutan, Sri Lanka, Maldives, Nepal
         # or, detailed race specifies Asian Indian or Other Asian 
@@ -713,8 +713,8 @@ pums_out = pums_out |>
         # OR born in Iraq AND 
         # ancestry is Assyrian/Kurdish/Chalean/Middle Eastern/Arab or speaks Aramaic/Arabic
           grepl('iraq', pobp_str) & (
-            grepl('(arab|arama)ic|kurd', lanp_str) | 
-            if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyri|kurd|chald', .)) 
+            grepl('(arab|arama)ic', lanp_str) | 
+            if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast', .)) 
           )
         )
     ),
@@ -723,8 +723,8 @@ pums_out = pums_out |>
     MENAIran = if_any(c(anc1p_str, anc2p_str), ~ grepl('iran', .)) | 
       # or was born in Iran and speaks Farsi or Dari
       (grepl('iran', pobp_str) & (
-        grepl('^dari|farsi|kurd', lanp_str) | 
-          if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyr|kurd|chald', .))
+        grepl('^dari|farsi', lanp_str) | 
+          if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast', .))
       )
     ),
     ### - Israeli
@@ -758,15 +758,15 @@ pums_out = pums_out |>
       # or was born in Syria AND
       grepl('syria', pobp_str) & (
         # has MidEast/Arab, Assyrian, or Kurdish ancestry or speaks Arabic/Neo-Aramaic
-        if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast|assyr|kurd|chald', .)) |
-          grepl('(arab|arama)ic|kurd', lanp_str)
+        if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|mideast', .)) |
+          grepl('(arab|arama)ic', lanp_str)
       )
     ),
     ### - Turkish
     # Has Turkish ancestry or speaks Turkish
     # (Turkish language flag may be too generous alone, but it gets us to the ACS counts)
     MENATurkish = if_any(c(anc1p_str, anc2p_str, lanp_str), ~ grepl('turkis', .)) | (
-      pobp_str %in% 'turkey' & if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab|assyr|kurd|chald', .))
+      pobp_str %in% 'turkey' & if_any(c(anc1p_str, anc2p_str), ~ grepl('^arab', .))
     ),
     ### - MENA Other
     # NOTE: in next version, should also exclude all other MENA groups
