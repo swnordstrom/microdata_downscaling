@@ -36,7 +36,9 @@ if (!exists('pums_raw')) {
     ),
     region = "state:41",
   ) |>
+    # Change names to lowercase (for convenience)
     rename_with(tolower) |>
+    # Select only relevant columns
     select(
       serialno, sporder, puma, pwgtp,
       matches('^rac'), matches('^anc.'), lanp, hisp, pobp
@@ -155,6 +157,8 @@ pums_out[, c(
   "OtherUnspec"
 )] = NA
 
+# Set seed for assignment reproducibility
+set.seed(33405)
 
 # Begin assignments
 pums_out = pums_out |>
@@ -366,8 +370,8 @@ pums_out = pums_out |>
     AfrCarib = racblk & (
       if_any(
         c(anc1p_str, anc2p_str, pobp_str),
-        ~ grepl('puerto|dominic|baham|cuba', .) |
-          grepl('barb[au]d|beliz|bermud|cayman|trinidad|tobag|arub|kitts|croix|maart', .) |
+        ~ grepl('baham|barb[au]d|dominica$', .) |
+          grepl('beliz|bermud|cayman|trinidad|tobag|arub|kitts|croix|maart', .) |
           grepl('west indi[ae]|caic|anguil|virgin isl|grenad|lucia|guade|cayen|guyan', .) 
       )
     ),
@@ -1029,12 +1033,61 @@ for (i in 1:length(re_grp_totals)) {
 
 pums_rarest
 
-### Export
+# Final steps:
+pums_rarest = pums_rarest |>
+  # Change "unassigned" primary label to "OtherUnassigned"
+  mutate(primary = ifelse(primary %in% 'unassigned', 'OtherUnspec', primary)) |>
+  # Manually reset the primary of 8% of people IDing as LatAfr to LatAfr
+  # (for structural reasons related to the assignment procedure for rarest race,
+  # LatAfr will be assigned zero individuals and these individuals are assigned
+  # instead to an African group; the 8% figure is based on OHA internal
+  # repository data from May 2026)
+  # (this involves merging back in the LatAfr column from pums_rarest, which is
+  # removed in the assignment procedure above - this step is not very elegant,
+  # but suffices for now!)
+  merge(pums_out |> select(serialno, sporder, LatAfr)) |>
+  mutate(primary = ifelse(LatAfr & runif(nrow(pums_rarest)) < 0.08, 'LatAfr', primary)) |>
+  select(-LatAfr)
+
+##### Export final products
 
 if (!dir.exists('oregon_oha/REALD/data_outputs')) dir.create('oregon_oha/REALD/data_outputs')
 
+# Export PUMS key with primary
 write.csv(
   # Export only the serial number/identifying info and the primary REALD
   pums_rarest %>% select(serialno, sporder, realdpri = primary), row.names = FALSE,
   'oregon_oha/REALD/data_outputs/acs_realdpri_2024_5yr.csv'
+)
+
+# Export statewide counts of both *primary* assignments and any assignment:
+
+# First get total counts:
+total_counts = pums_out |>
+  select(
+    pwgtp, 
+    starts_with(c('MENA', 'Wht', 'Asn', 'Afr', 'Lat', 'AIAN', 'NHPI', 'Other'))
+  ) |>
+  # Get sums (number of people) identifying as each group
+  mutate(across(where(is.logical), ~ pwgtp * .)) |>
+  # Remove person weight colum (population total) because it isn't needed
+  select(-pwgtp) |>
+  apply(2, sum) |>
+  (\(x) data.frame(reald = names(x), total_count = x, row.names = NULL))()
+
+# Count up the rarest (primary) assignments
+rarest_counts = pums_rarest |>
+  count(primary, wt = pwgtp) |>
+  rename(reald = primary, primary_count = n)
+
+# Combine together
+all_counts = merge(total_counts, rarest_counts, all = TRUE)
+
+head(all_counts)
+tail(all_counts)
+
+# Export
+write.csv(
+  all_counts, row.names = FALSE, 
+  'oregon_oha/REALD/data_outputs/reald_counts_2024.csv'
 )
